@@ -22,7 +22,7 @@ typedef struct {
 	SHARED_DATA shared_data;
 } APP_DATA;
 
-const char *progname = "ex_rep_mgr";
+const char *progname = "bdbd";
 
 static void event_callback __P((DB_ENV *, u_int32_t, void *));
 
