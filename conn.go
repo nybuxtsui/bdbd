@@ -1,146 +1,166 @@
-package main
+package bdbd
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
+	"io"
 	"log"
 	"net"
-	"strconv"
-	"sync"
-	"time"
+	"strings"
 )
 
-type conn struct {
+type Conn struct {
 	conn net.Conn
-	lock sync.Mutex
 
-	reader *bufio.Reader
-	writer *bufio.Writer
-
-	readTimeout  time.Duration
-	writeTimeout time.Duration
+	rb *bufio.Reader
+	wb *bufio.Writer
 }
 
-func NewConn(netConn net.Conn, readTimeout, writeTimeout time.Duration) Conn {
-	return &conn{
-		conn:         netConn,
-		bw:           bufio.NewWriterSize(netConn, 4*1024*1024),
-		br:           bufio.NewReaderSize(netConn, 4*1024*1024),
-		readTimeout:  readTimeout,
-		writeTimeout: writeTimeout,
+var (
+	ErrRequest = errors.New("invalid request")
+)
+
+func NewConn(c net.Conn) *Conn {
+	return &Conn{
+		conn: c,
+		rb:   bufio.NewReaderSize(c, 1024*1024),
+		wb:   bufio.NewWriterSize(c, 16*1024),
 	}
 }
 
-var ErrRequest = errors.New("bdbd: bad request")
-
-func (c *conn) readLine() ([]byte, error) {
-	p, err := c.reader.ReadSlice('\n')
-	if err == bufio.ErrBufferFull {
-		log.Println("request too long")
-		return nil, ErrRequest
-	}
+func (c *Conn) readLine() ([]byte, error) {
+	line, err := c.rb.ReadSlice('\n')
 	if err != nil {
+		log.Println("ReadSlice:", err)
 		return nil, err
 	}
-	i := len(p) - 2
-	if i < 0 || p[i] != '\r' {
-		log.Println("bad line terminator")
+	if len(line) <= 2 {
+		log.Println("empty line")
 		return nil, ErrRequest
 	}
-	return p[:i], nil
+	if line[len(line)-2] != '\r' {
+		log.Println("line invalid")
+		return nil, ErrRequest
+	}
+	return line[:len(line)-2], nil
 }
 
-func (c *conn) readNumber(line []byte) (n int32, err error) {
-	line, err := c.readLine()
-	if len(line) == 0 {
-		log.Println("bad argument count")
+func (c *Conn) readNumber(buff []byte) (int64, error) {
+	if len(buff) == 0 {
+		log.Println("number empty")
 		return 0, ErrRequest
 	}
-	n = 0
-	for i := 1; i < len(line); i++ {
-		ch := line[i]
-		if ch < '0' || ch > '9' {
-			log.Println("bad argument count number")
+	var sign int64 = 1
+	var r int64 = 0
+	for i, c := range buff {
+		if i == 0 && c == '-' {
+			sign = -1
+		} else if c < '0' || c > '9' {
+			log.Println("number invalid")
 			return 0, ErrRequest
+		} else {
+			r *= 10
+			r += int64(c - '0')
 		}
-		count *= 10
-		count += ch - '0'
+	}
+	return r * sign, nil
+}
+
+func (c *Conn) readCount(tag byte) (int64, error) {
+	line, err := c.readLine()
+	if err != nil {
+		log.Println("ReadLine:", err)
+		return 0, err
+	}
+	if len(line) < 2 {
+		log.Println("line invalid")
+		return 0, ErrRequest
+	}
+	if line[0] != tag {
+		log.Println("tag invalid")
+		return 0, ErrRequest
+	}
+	count, err := c.readNumber(line[1:])
+	if err != nil {
+		log.Println("readNumber:", err)
+		return 0, ErrRequest
+	}
+	return count, nil
+}
+
+func (c *Conn) processRequest() error {
+	req, err := c.readRequest()
+	if err != nil {
+		log.Println("readRequest:", err)
+		return err
+	}
+	cmd := strings.ToLower(string(req[0]))
+	if f, ok := commandMap[cmd]; ok {
+		err = f(c.wb, req[1:])
+		if err != nil {
+			log.Println("f:", err)
+			return err
+		}
+	} else {
+		c.wb.WriteString("-ERR unknown command '" + cmd + "'\r\n")
+	}
+	if err = c.wb.Flush(); err != nil {
+		log.Println("Flush:", err)
+		return err
+	} else {
+		return nil
 	}
 }
 
-func (c *conn) readData(int length) ([]byte, error) {
-	data, err := c.reader
-	if len(data) == length+2 {
-	}
-}
-
-func (c *conn) readRequest() (interface{}, error) {
-	if ch, err := c.reader.ReadByte(); err != nil {
+func (c *Conn) readRequest() ([][]byte, error) {
+	count, err := c.readCount('*')
+	if err != nil {
+		log.Println("readCount:", err)
 		return nil, err
-	} else if ch != '*' {
-		log.Println("bdbd: bad argument count tag")
+	}
+	if count <= 0 {
+		log.Println("count <= 0:", err)
 		return nil, ErrRequest
 	}
-	count, err := c.readNumber(line)
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < count; i++ {
-		if ch, err := c.reader.ReadByte(); err != nil {
+	var r = make([][]byte, count)
+	var i int64
+	for i = 0; i < count; i++ {
+		length, err := c.readCount('$')
+		if err != nil {
+			log.Println("readCount:", err)
 			return nil, err
-		} else if ch != '$' {
-			log.Println("bdbd: bad argument length tag")
+		}
+		buff := make([]byte, length+2)
+		_, err = io.ReadFull(c.rb, buff)
+		if err != nil {
+			log.Println("readfull:", err)
+			return nil, err
+		}
+		if buff[length+1] != '\n' || buff[length] != '\r' {
+			log.Println("request crlf invalid")
 			return nil, ErrRequest
 		}
-		argumentlen, err := c.readNumber(line)
-		c.reader.ReadSlice('\n')
+		r[i] = buff[0:length]
 	}
-	switch line[0] {
-	case '+':
-		switch {
-		case len(line) == 3 && line[1] == 'O' && line[2] == 'K':
-			// Avoid allocation for frequent "+OK" response.
-			return okReply, nil
-		case len(line) == 5 && line[1] == 'P' && line[2] == 'O' && line[3] == 'N' && line[4] == 'G':
-			// Avoid allocation in PING command benchmarks :)
-			return pongReply, nil
-		default:
-			return string(line[1:]), nil
+	return r, nil
+}
+
+func (c *Conn) Close() {
+	c.conn.Close()
+}
+
+func (c *Conn) Start() {
+	defer func() {
+		c.Close()
+		if err := recover(); err != nil {
+			log.Println(err)
 		}
-	case '-':
-		return Error(string(line[1:])), nil
-	case ':':
-		return parseInt(line[1:])
-	case '$':
-		n, err := parseLen(line[1:])
-		if n < 0 || err != nil {
-			return nil, err
-		}
-		p := make([]byte, n)
-		_, err = io.ReadFull(c.br, p)
+	}()
+	for {
+		err := c.processRequest()
 		if err != nil {
-			return nil, err
+			log.Println("processRequest:", err)
+			break
 		}
-		if line, err := c.readLine(); err != nil {
-			return nil, err
-		} else if len(line) != 0 {
-			return nil, errors.New("bdbd: bad bulk string format")
-		}
-		return p, nil
-	case '*':
-		n, err := parseLen(line[1:])
-		if n < 0 || err != nil {
-			return nil, err
-		}
-		r := make([]interface{}, n)
-		for i := range r {
-			r[i], err = c.readReply()
-			if err != nil {
-				return nil, err
-			}
-		}
-		return r, nil
 	}
-	return nil, errors.New("bdbd: unexpected response line")
 }
