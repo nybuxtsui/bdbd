@@ -96,10 +96,13 @@ common_rep_setup(dbenv, argc, argv, setup_info)
 			setup_info->home = optarg;
 			break;
 		case 'L':
+            // 集群创建者
+            // 监听端口
 			if (!is_repmgr)
 				usage(is_repmgr, setup_info->progname);
 			setup_info->self.creator = 1; /* FALLTHROUGH */
 		case 'l':
+            // 监听端口
 			setup_info->self.host = strtok(optarg, ":");
 			if ((portstr = strtok(NULL, ":")) == NULL) {
 				fprintf(stderr, "Bad host specification.\n");
@@ -131,13 +134,17 @@ common_rep_setup(dbenv, argc, argv, setup_info)
 			}
 			break;
 		case 'p':
+            // 升级为master的优先级
+            // 越大越高
 			priority = atoi(optarg);
 			break;
 		case 'R':
+            // 启用DB_REPMGR_PEER，该参数支持client-to-client同步
 			if (!is_repmgr)
 				usage(is_repmgr, setup_info->progname);
 			site.peer = 1; /* FALLTHROUGH */
 		case 'r':
+            // 其他的服务器地址
 			site.host = optarg;
 			site.host = strtok(site.host, ":");
 			if ((portstr = strtok(NULL, ":")) == NULL) {
@@ -379,7 +386,10 @@ doloop(dbenv, shared_data)
 		pfinfo->flag = 0;
 	}
 
-	for (;;) {
+    Wait(dbenv);
+    shared_data->app_finished = 1;
+
+    if (0) for (;;) {
 		printf("QUOTESERVER%s> ",
 		    shared_data->is_master ? "" : " (read-only)");
 		fflush(stdout);
@@ -521,6 +531,7 @@ err:	if (dbp != NULL)
 		(void)dbp->close(dbp, DB_NOSYNC);
 	if (pfinfo != NULL)
 		free(pfinfo);
+
 	return (ret);
 }
 
@@ -538,6 +549,7 @@ create_env(progname, dbenvp)
 		return (ret);
 	}
 
+    //TODO: 将错误写到错误文件
 	dbenv->set_errfile(dbenv, stderr);
 	dbenv->set_errpfx(dbenv, progname);
 
