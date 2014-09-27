@@ -10,12 +10,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 )
 
 //var redisAddr = flag.String("l", ":2323", "redis listen port")
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU()*2 + 4)
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -67,8 +69,9 @@ func main() {
 				mylog.Error("Server|%s", err.Error())
 				continue
 			}
-			conn := server.NewConn(client)
-			go conn.Start(dbenv)
+			client.SetKeepAlive(true)
+			conn := server.NewConn(client, dbenv)
+			go conn.Start()
 		}
 	}()
 

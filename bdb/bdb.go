@@ -36,22 +36,14 @@ type BdbConfig struct {
 }
 
 type DbEnv struct {
-	ptr         *C.DB_ENV
+	env         *C.DB_ENV
 	shared_data *C.SHARED_DATA
-	dbmap       map[string]*Db
-	lock        sync.RWMutex
 	waitStop    sync.WaitGroup
 	waitExit    sync.WaitGroup
 	waitReady   sync.WaitGroup
-	closeChan   chan CloseHandler
 }
 
 type Db struct {
-	ptr *C.DB
-}
-
-type CloseHandler struct {
-	tm time.Time
 	db *C.DB
 }
 
@@ -61,172 +53,14 @@ var (
 	ErrDeadLock = errors.New("dead_lock")
 	ErrRepDead  = errors.New("rep_dead")
 	ErrLockout  = errors.New("lockout")
-	ErrReadonly = errors.New("readonly")
+	ErrAccess   = errors.New("access")
 	ErrInval    = errors.New("inval")
 	ErrNotFound = errors.New("not_found")
 	ErrKeyExist = errors.New("key_exist")
 	ErrUnknown  = errors.New("unknown")
 )
 
-func (dbenv *DbEnv) closeWork() {
-	dbenv.waitStop.Add(1)
-	for c := range dbenv.closeChan {
-		if C.is_finished(dbenv.shared_data) == 0 {
-			d := c.tm.Sub(time.Now())
-			if d > 0 {
-				time.Sleep(d)
-			}
-		}
-		C.db_close(c.db)
-	}
-	dbenv.waitStop.Done()
-}
-
-func ResultToError(r C.int) error {
-	switch r {
-	case 0:
-		return nil
-	case C.DB_LOCK_DEADLOCK:
-		return ErrDeadLock
-	case C.DB_REP_HANDLE_DEAD:
-		return ErrRepDead
-	case C.DB_REP_LOCKOUT:
-		return ErrLockout
-	case C.DB_NOTFOUND:
-		return ErrNotFound
-	case C.EINVAL:
-		return ErrInval
-	case C.DB_KEYEXIST:
-		return ErrKeyExist
-	case C.EACCES:
-		return ErrReadonly
-	default:
-		return ErrUnknown
-	}
-}
-
-func SplitKey(_key []byte) (string, []byte) {
-	var table string = ""
-	var name []byte = nil
-	for i := 0; i < len(_key); i++ {
-		if _key[i] == ':' {
-			table = string(_key[:i])
-			name = _key[i+1:]
-			break
-		}
-	}
-	if table == "" && name == nil {
-		table = "__"
-		name = _key
-	}
-	if len(table) == 0 {
-		table = "__"
-	}
-	if len(name) == 0 {
-		name = []byte{0}
-	}
-	return table, name
-}
-
-func (env *DbEnv) SetValue(_key []byte, value []byte) error {
-	table, key := SplitKey(_key)
-	db, err := env.GetDb(table)
-	if err != nil {
-		log.Error("GetValue|GetDb|%s", err.Error())
-		return err
-	}
-	ret := C.db_put(
-		db.ptr,
-		(*C.char)(unsafe.Pointer(&key[0])),
-		C.uint(len(key)),
-		(*C.char)(unsafe.Pointer(&value[0])),
-		C.uint(len(value)),
-	)
-	err = ResultToError(ret)
-	if err == ErrRepDead {
-		env.Close(table)
-	}
-	return err
-}
-
-func (env *DbEnv) GetValue(_key []byte) ([]byte, error) {
-	table, key := SplitKey(_key)
-	db, err := env.GetDb(table)
-	if err != nil {
-		log.Error("GetValue|GetDb|%s", err.Error())
-		return nil, err
-	}
-	var data *C.char
-	var datalen C.uint
-
-	ret := C.db_get(
-		db.ptr,
-		(*C.char)(unsafe.Pointer(&key[0])),
-		C.uint(len(key)),
-		&data,
-		&datalen,
-	)
-	if ret == 0 {
-		if data == nil {
-			return nil, nil
-		} else {
-			r := C.GoBytes(unsafe.Pointer(data), C.int(datalen))
-			C.free(unsafe.Pointer(data))
-			return r, nil
-		}
-	}
-	err = ResultToError(ret)
-	if err == ErrRepDead {
-		env.Close(table)
-	}
-	return nil, err
-}
-
-func (dbenv *DbEnv) Close(name string) {
-	dbenv.lock.Lock()
-	defer dbenv.lock.Unlock()
-	if db, ok := dbenv.dbmap[name]; ok {
-		delete(dbenv.dbmap, name)
-		dbenv.closeChan <- CloseHandler{
-			db: db.ptr,
-			tm: time.Now().Add(5 * time.Second),
-		}
-	}
-}
-
-func (dbenv *DbEnv) GetDb(name string) (*Db, error) {
-	dbenv.lock.RLock()
-	db, ok := dbenv.dbmap[name]
-	dbenv.lock.RUnlock()
-	if ok {
-		return db, nil
-	}
-	dbenv.lock.Lock()
-	defer dbenv.lock.Unlock()
-	db, ok = dbenv.dbmap[name]
-	if ok {
-		return db, nil
-	}
-
-	var dbp *C.DB
-	cname := []byte(name)
-	r := C.env_get(dbenv.ptr, dbenv.shared_data, (*C.char)(unsafe.Pointer(&cname[0])), &dbp)
-	switch r {
-	case 0:
-		db := &Db{dbp}
-		dbenv.dbmap[name] = db
-		return db, nil
-	case -1:
-		return db, ErrNotExist
-	case -2:
-		return nil, ErrDeadLock
-	default:
-		return nil, ErrUnknown
-	}
-}
-
 func Start(config BdbConfig) *DbEnv {
-
 	args := make([]string, 0, 20)
 	if config.AckAll && config.UseRepMgr {
 		args = append(args, "-a")
@@ -275,7 +109,6 @@ func Start(config BdbConfig) *DbEnv {
 	}
 
 	dbenv := new(DbEnv)
-	dbenv.dbmap = make(map[string]*Db)
 	dbenv.waitStop.Add(1)
 	dbenv.waitExit.Add(1)
 	dbenv.waitReady.Add(1)
@@ -304,21 +137,141 @@ func Start(config BdbConfig) *DbEnv {
 	return dbenv
 }
 
+//export Wait
+func Wait(env *C.DB_ENV, shared_data *C.SHARED_DATA, ptr unsafe.Pointer) {
+	dbenv := (*DbEnv)(ptr)
+	dbenv.env = env
+	dbenv.shared_data = shared_data
+
+	dbenv.waitReady.Done()
+	dbenv.waitStop.Wait()
+}
+
+func ResultToError(r C.int) error {
+	switch r {
+	case 0:
+		return nil
+	case C.DB_LOCK_DEADLOCK:
+		return ErrDeadLock
+	case C.DB_REP_HANDLE_DEAD:
+		return ErrRepDead
+	case C.DB_REP_LOCKOUT:
+		return ErrLockout
+	case C.DB_NOTFOUND:
+		return ErrNotFound
+	case C.ENOENT:
+		return ErrNotExist
+	case C.EINVAL:
+		return ErrInval
+	case C.DB_KEYEXIST:
+		return ErrKeyExist
+	case C.EACCES:
+		return ErrAccess
+	default:
+		return ErrUnknown
+	}
+}
+
+func SplitKey(_key []byte) (string, []byte) {
+	var table string = ""
+	var name []byte = nil
+	for i := 0; i < len(_key); i++ {
+		if _key[i] == ':' {
+			table = string(_key[:i])
+			name = _key[i+1:]
+			break
+		}
+	}
+	if table == "" && name == nil {
+		table = "__default__"
+		name = _key
+	}
+	if len(table) == 0 {
+		table = "__default__"
+	}
+	if len(name) == 0 {
+		name = []byte{0}
+	}
+	return table, name
+}
+
+func (dbenv *DbEnv) GetDb(name string) (*Db, error) {
+	var dbp *C.DB
+	cname := []byte(name)
+	ret := C.env_get(dbenv.env, dbenv.shared_data, (*C.char)(unsafe.Pointer(&cname[0])), &dbp)
+	err := ResultToError(ret)
+	if err == nil {
+		return &Db{db: dbp}, nil
+	} else {
+		return nil, err
+	}
+}
+
 func (dbenv *DbEnv) Exit() {
-	close(dbenv.closeChan)
 	dbenv.waitStop.Done()
 	dbenv.waitExit.Wait()
 }
 
-//export Wait
-func Wait(env *C.DB_ENV, shared_data *C.SHARED_DATA, ptr unsafe.Pointer) {
-	dbenv := (*DbEnv)(ptr)
-	dbenv.ptr = env
-	dbenv.shared_data = shared_data
+func (db *Db) Set(key []byte, value []byte) error {
+	ret := C.db_put(
+		db.db,
+		(*C.char)(unsafe.Pointer(&key[0])),
+		C.uint(len(key)),
+		(*C.char)(unsafe.Pointer(&value[0])),
+		C.uint(len(value)),
+	)
+	return ResultToError(ret)
+}
 
-	dbenv.closeChan = make(chan CloseHandler, 1000)
-	go dbenv.closeWork()
+func (db *Db) Get(key []byte) ([]byte, error) {
+	var data *C.char
+	var datalen C.uint
 
-	dbenv.waitReady.Done()
-	dbenv.waitStop.Wait()
+	ret := C.db_get(
+		db.db,
+		(*C.char)(unsafe.Pointer(&key[0])),
+		C.uint(len(key)),
+		&data,
+		&datalen,
+	)
+	err := ResultToError(ret)
+	if err == nil {
+		if data == nil {
+			return nil, nil
+		} else {
+			r := C.GoBytes(unsafe.Pointer(data), C.int(datalen))
+			C.free(unsafe.Pointer(data))
+			return r, nil
+		}
+	}
+	return nil, err
+}
+
+func (db *Db) Close() {
+	ret := C.db_close(db.db)
+	if ret == 0 {
+		return
+	} else if ret == C.EINVAL {
+		log.Error("Close|db_close|EINVAL")
+		return
+	}
+	go func() {
+		for {
+			ret := C.db_close(db.db)
+			if ret == 0 {
+				break
+			} else if ret == C.EINVAL {
+				log.Error("Close|db_close|EINVAL")
+				break
+			} else if ret == C.DB_LOCK_DEADLOCK {
+				log.Error("Close|db_close|DB_LOCK_DEADLOCK")
+			} else if ret == C.DB_LOCK_NOTGRANTED {
+				log.Error("Close|db_close|DB_LOCK_NOTGRANTED")
+			} else {
+				log.Error("Close|db_close|unknown|%v", ret)
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
 }

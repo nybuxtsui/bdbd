@@ -17,17 +17,22 @@ type Conn struct {
 
 	rb *bufio.Reader
 	wb *bufio.Writer
+
+	dbenv *bdb.DbEnv
+	dbmap map[string]*bdb.Db
 }
 
 var (
 	ErrRequest = errors.New("invalid request")
 )
 
-func NewConn(c net.Conn) *Conn {
+func NewConn(c net.Conn, dbenv *bdb.DbEnv) *Conn {
 	return &Conn{
-		conn: c,
-		rb:   bufio.NewReaderSize(c, 1024*1024),
-		wb:   bufio.NewWriterSize(c, 16*1024),
+		conn:  c,
+		rb:    bufio.NewReaderSize(c, 1024*1024),
+		wb:    bufio.NewWriterSize(c, 16*1024),
+		dbenv: dbenv,
+		dbmap: make(map[string]*bdb.Db),
 	}
 }
 
@@ -91,21 +96,26 @@ func (c *Conn) readCount(tag byte) (int64, error) {
 	return count, nil
 }
 
-func (c *Conn) processRequest(dbenv *bdb.DbEnv) error {
+func (c *Conn) processRequest() error {
 	req, err := c.readRequest()
 	if err != nil {
 		log.Error("processRequest|readRequest|%s", err.Error())
 		return err
 	}
 	cmd := strings.ToLower(string(req[0]))
-	if f, ok := commandMap[cmd]; ok {
-		err = f(c.wb, dbenv, req[1:])
-		if err != nil {
-			log.Error("processRequest|func|%s", err.Error())
-			return err
+	if def, ok := cmdMap[cmd]; ok {
+		args := req[1:]
+		if len(args) < def.minArgs || len(args) > def.maxArgs {
+			c.wb.WriteString(fmt.Sprintf("-ERR wrong number of arguments for '%s' command\r\n", cmd))
+		} else {
+			err = def.fun(c, args)
+			if err != nil {
+				log.Error("processRequest|func|%s", err.Error())
+				return err
+			}
 		}
 	} else {
-		c.wb.WriteString("-ERR unknown command '" + cmd + "'\r\n")
+		c.wb.WriteString(fmt.Sprintf("-ERR unknown command '%s'\r\n", cmd))
 	}
 	if err = c.wb.Flush(); err != nil {
 		log.Error("processRequest|Flush|%s", err.Error())
@@ -148,6 +158,24 @@ func (c *Conn) readRequest() ([][]byte, error) {
 	return r, nil
 }
 
+func (conn *Conn) writeLen(prefix byte, n int) error {
+	var buff [64]byte
+	buff[len(buff)-1] = '\n'
+	buff[len(buff)-2] = '\r'
+	i := len(buff) - 3
+	for {
+		buff[i] = byte('0' + n%10)
+		i -= 1
+		n = n / 10
+		if n == 0 {
+			break
+		}
+	}
+	buff[i] = prefix
+	_, err := conn.wb.Write(buff[i:])
+	return err
+}
+
 func (c *Conn) Close() {
 	c.conn.Close()
 }
@@ -165,15 +193,18 @@ func PrintPanic(err interface{}) {
 	}
 }
 
-func (c *Conn) Start(dbenv *bdb.DbEnv) {
+func (c *Conn) Start() {
 	defer func() {
 		c.Close()
+		for _, v := range c.dbmap {
+			v.Close()
+		}
 		if err := recover(); err != nil {
 			PrintPanic(err)
 		}
 	}()
 	for {
-		err := c.processRequest(dbenv)
+		err := c.processRequest()
 		if err != nil {
 			log.Error("Start|processRequest|%s", err.Error())
 			break
