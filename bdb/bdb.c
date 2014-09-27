@@ -4,10 +4,10 @@
 #include "rep_common.h"
 
 int
-db_close(DB_ENV *dbenv, DB *dbp) {
+db_close(DB *dbp) {
     int ret;
     if ((ret = dbp->close(dbp, 0)) != 0) {
-        dbenv->err(dbenv, ret, "DB->close");
+        dbp->err(dbp, ret, "DB->close");
     }
     return 0;
 }
