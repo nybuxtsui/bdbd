@@ -1,0 +1,4 @@
+set_cachesize 2 0 2
+set_lg_regionmax 10000000
+mutex_set_max 500000
+set_tx_max 5000
