@@ -23,12 +23,12 @@ int master_eid;
 char *myaddr;
 unsigned short myport;
 
-const char *progname = "ex_rep_base";
+static const char *progname = "ex_rep_base";
 
 static void event_callback __P((DB_ENV *, u_int32_t, void *));
 
 int
-start(argc, argv)
+start_base(argc, argv)
 	int argc;
 	char *argv[];
 {
