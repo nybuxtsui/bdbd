@@ -103,7 +103,7 @@ extern pthread_key_t permfail_key;
 void *checkpoint_thread __P((void *));
 int common_rep_setup __P((DB_ENV *, int, char *[], SETUP_DATA *));
 int create_env __P((const char *, DB_ENV **));
-int doloop __P((DB_ENV *, SHARED_DATA *));
+int doloop __P((DB_ENV *, SHARED_DATA *, void *));
 int env_init __P((DB_ENV *, const char *));
 int finish_support_threads __P((thread_t *, thread_t *));
 void *log_archive_thread __P((void *));

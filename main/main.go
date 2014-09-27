@@ -49,7 +49,7 @@ func main() {
 	mylog.Init(config.Logger)
 
 	mylog.Info("bdb|starting")
-	bdb.Start(config.Bdb)
+	dbenv := bdb.Start(config.Bdb)
 	mylog.Info("bdb|started")
 
 	go func() {
@@ -59,7 +59,7 @@ func main() {
 		}
 		listener, err := net.ListenTCP("tcp", addr)
 		if err != nil {
-			log.Panicln(err)
+			mylog.Fatal("Server|ListenTCP|%s", err.Error())
 		}
 		for {
 			client, err := listener.AcceptTCP()
@@ -68,12 +68,12 @@ func main() {
 				continue
 			}
 			conn := server.NewConn(client)
-			go conn.Start()
+			go conn.Start(dbenv)
 		}
 	}()
 
 	mylog.Info("start")
 	<-signalChan
-	bdb.Exit()
+	dbenv.Exit()
 	mylog.Info("bye")
 }

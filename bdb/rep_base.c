@@ -28,9 +28,10 @@ static const char *progname = "ex_rep_base";
 static void event_callback __P((DB_ENV *, u_int32_t, void *));
 
 int
-start_base(argc, argv)
+start_base(argc, argv, ptr)
 	int argc;
 	char *argv[];
+    void *ptr;
 {
 	DB_ENV *dbenv;
 	SETUP_DATA setup_info;
@@ -172,7 +173,7 @@ start_base(argc, argv)
 		sleep(5);
 	}
 
-	if ((ret = doloop(dbenv, &my_app_data.shared_data)) != 0) {
+	if ((ret = doloop(dbenv, &my_app_data.shared_data, ptr)) != 0) {
 		dbenv->err(dbenv, ret, "Main loop failed");
 		goto err;
 	}

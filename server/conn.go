@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/nybuxtsui/bdbd/bdb"
 	"github.com/nybuxtsui/bdbd/log"
 	"io"
 	"net"
@@ -90,7 +91,7 @@ func (c *Conn) readCount(tag byte) (int64, error) {
 	return count, nil
 }
 
-func (c *Conn) processRequest() error {
+func (c *Conn) processRequest(dbenv *bdb.DbEnv) error {
 	req, err := c.readRequest()
 	if err != nil {
 		log.Error("processRequest|readRequest|%s", err.Error())
@@ -98,7 +99,7 @@ func (c *Conn) processRequest() error {
 	}
 	cmd := strings.ToLower(string(req[0]))
 	if f, ok := commandMap[cmd]; ok {
-		err = f(c.wb, req[1:])
+		err = f(c.wb, dbenv, req[1:])
 		if err != nil {
 			log.Error("processRequest|func|%s", err.Error())
 			return err
@@ -164,7 +165,7 @@ func PrintPanic(err interface{}) {
 	}
 }
 
-func (c *Conn) Start() {
+func (c *Conn) Start(dbenv *bdb.DbEnv) {
 	defer func() {
 		c.Close()
 		if err := recover(); err != nil {
@@ -172,7 +173,7 @@ func (c *Conn) Start() {
 		}
 	}()
 	for {
-		err := c.processRequest()
+		err := c.processRequest(dbenv)
 		if err != nil {
 			log.Error("Start|processRequest|%s", err.Error())
 			break

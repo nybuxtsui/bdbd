@@ -359,9 +359,10 @@ err:
 #define	BUFSIZE 1024
 
 int
-doloop(dbenv, shared_data)
+doloop(dbenv, shared_data, ptr)
 	DB_ENV *dbenv;
 	SHARED_DATA *shared_data;
+    void *ptr;
 {
 	DB *dbp;
 	DBT key, data;
@@ -386,7 +387,7 @@ doloop(dbenv, shared_data)
 		pfinfo->flag = 0;
 	}
 
-    Wait(dbenv);
+    Wait(dbenv, shared_data, ptr);
     shared_data->app_finished = 1;
 
     if (0) for (;;) {
@@ -566,6 +567,7 @@ env_init(dbenv, home)
 	u_int32_t flags;
 	int ret;
 
+    //TODO: set cachesize
 	(void)dbenv->set_cachesize(dbenv, 0, CACHESIZE, 0);
 	(void)dbenv->set_flags(dbenv, DB_TXN_NOSYNC, 1);
 

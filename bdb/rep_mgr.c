@@ -27,9 +27,10 @@ static const char *progname = "ex_rep_mgr";
 static void event_callback __P((DB_ENV *, u_int32_t, void *));
 
 int
-start_mgr(argc, argv)
+start_mgr(argc, argv, ptr)
 	int argc;
 	char *argv[];
+    void *ptr;
 {
 	DB_ENV *dbenv;
 	DB_SITE *dbsite;
@@ -145,7 +146,7 @@ start_mgr(argc, argv)
 	if ((ret = dbenv->repmgr_start(dbenv, 3, start_policy)) != 0)
 		goto err;
 
-	if ((ret = doloop(dbenv, &my_app_data.shared_data)) != 0) {
+	if ((ret = doloop(dbenv, &my_app_data.shared_data, ptr)) != 0) {
 		dbenv->err(dbenv, ret, "Client failed");
 		goto err;
 	}
