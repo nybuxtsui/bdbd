@@ -11,13 +11,15 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
+	"time"
 )
 
 //var redisAddr = flag.String("l", ":2323", "redis listen port")
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU()*2 + 4)
+	runtime.GOMAXPROCS(runtime.NumCPU() * 4)
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -54,29 +56,57 @@ func main() {
 	dbenv := bdb.Start(config.Bdb)
 	mylog.Info("bdb|started")
 
+	connmap := make(map[net.Conn]struct{})
+	var connlock sync.Mutex
+	var listener *net.TCPListener
+	var wait sync.WaitGroup
+
 	go func() {
 		addr, err := net.ResolveTCPAddr("tcp", config.Server.Listen)
 		if err != nil {
 			mylog.Fatal("ResolveTCPAddr|%s", err.Error())
 		}
-		listener, err := net.ListenTCP("tcp", addr)
+		listener, err = net.ListenTCP("tcp", addr)
 		if err != nil {
 			mylog.Fatal("Server|ListenTCP|%s", err.Error())
 		}
 		for {
 			client, err := listener.AcceptTCP()
 			if err != nil {
-				mylog.Error("Server|%s", err.Error())
-				continue
+				if err.Error() == "use of closed network connection" {
+					mylog.Info("Server|closing")
+					break
+				} else {
+					mylog.Error("Server|%s", err.Error())
+					continue
+				}
 			}
+			connlock.Lock()
+			connmap[client] = struct{}{}
+			connlock.Unlock()
+			wait.Add(1)
 			client.SetKeepAlive(true)
 			conn := server.NewConn(client, dbenv)
-			go conn.Start()
+			go func() {
+				conn.Start()
+				connlock.Lock()
+				delete(connmap, client)
+				connlock.Unlock()
+				wait.Done()
+			}()
 		}
 	}()
 
 	mylog.Info("start")
 	<-signalChan
+
+	listener.Close()
+	time.Sleep(time.Millisecond * 10)
+	for k, _ := range connmap {
+		k.Close()
+	}
+	wait.Wait()
+
 	dbenv.Exit()
 	mylog.Info("bye")
 }

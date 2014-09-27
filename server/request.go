@@ -38,10 +38,15 @@ func cmdGet(conn *Conn, args [][]byte) error {
 		if err == bdb.ErrNotFound {
 			conn.wb.WriteString("$-1\r\n")
 			return nil
+		} else {
+			if err == bdb.ErrRepDead {
+				db.Close()
+				delete(conn.dbmap, table)
+			}
+			log.Error("cmdGet|GetValue|%s", err.Error())
+			conn.wb.WriteString("-ERR dberr\r\n")
+			return nil
 		}
-		log.Error("cmdGet|GetValue|%s", err.Error())
-		conn.wb.WriteString("-ERR dberr\r\n")
-		return nil
 	} else {
 		conn.writeLen('$', len(value))
 		conn.wb.Write(value)
@@ -68,6 +73,10 @@ func cmdSet(conn *Conn, args [][]byte) error {
 	}
 	err := db.Set(key, args[1])
 	if err != nil {
+		if err == bdb.ErrRepDead {
+			db.Close()
+			delete(conn.dbmap, table)
+		}
 		log.Error("cmdGet|GetValue|%s", err.Error())
 		conn.wb.WriteString("-ERR dberr\r\n")
 		return nil
