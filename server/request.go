@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/nybuxtsui/bdbd/bdb"
 	"github.com/nybuxtsui/bdbd/log"
+	"sync"
 )
 
 type cmdDef struct {
@@ -11,77 +12,132 @@ type cmdDef struct {
 	maxArgs int
 }
 
+type bdbGetReq struct {
+	table string
+	key   []byte
+	resp  chan bdbGetResp
+}
+
+type bdbGetResp struct {
+	value []byte
+	err   error
+}
+
+type bdbSetReq struct {
+	table string
+	key   []byte
+	value []byte
+	resp  chan bdbSetResp
+}
+
+type bdbSetResp struct {
+	err error
+}
+
 var cmdMap = map[string]cmdDef{
 	"get": cmdDef{cmdGet, 1, 1},
 	"set": cmdDef{cmdSet, 2, 2},
 }
 
-func cmdGet(conn *Conn, args [][]byte) error {
-	if len(args[0]) == 0 {
-		conn.wb.WriteString("-ERR wrong length of key for 'get' command\r\n")
-		return nil
-	}
+var workWait sync.WaitGroup
+var workChan = make(chan interface{}, 10000)
 
-	table, key := bdb.SplitKey(args[0])
-	db := conn.dbmap[table]
-	if db == nil {
-		var err error
-		db, err = conn.dbenv.GetDb(table)
-		if err != nil {
-			log.Error("cmdGet|GetDb|%s", err.Error())
-			conn.wb.WriteString("-ERR dberr")
-			return nil
-		}
-	}
-	value, err := db.Get(key)
-	if err != nil {
-		if err == bdb.ErrNotFound {
-			conn.wb.WriteString("$-1\r\n")
-			return nil
-		} else {
-			if err == bdb.ErrRepDead {
-				db.Close()
-				delete(conn.dbmap, table)
-			}
-			log.Error("cmdGet|GetValue|%s", err.Error())
-			conn.wb.WriteString("-ERR dberr\r\n")
-			return nil
-		}
-	} else {
-		conn.writeLen('$', len(value))
-		conn.wb.Write(value)
-		_, err := conn.wb.WriteString("\r\n")
-		return err
+func Start(dbenv *bdb.DbEnv) {
+	for i := 0; i < 4; i++ {
+		go worker(dbenv)
 	}
 }
 
-func cmdSet(conn *Conn, args [][]byte) error {
-	if len(args[0]) == 0 {
-		_, err := conn.wb.WriteString("-ERR wrong length of key for 'get' command\r\n")
-		return err
-	}
-	table, key := bdb.SplitKey(args[0])
-	db := conn.dbmap[table]
-	if db == nil {
-		var err error
-		db, err = conn.dbenv.GetDb(table)
-		if err != nil {
-			log.Error("cmdGet|GetDb|%s", err.Error())
-			conn.wb.WriteString("-ERR dberr\r\n")
-			return nil
+func Exit() {
+	close(workChan)
+	workWait.Wait()
+}
+
+func worker(dbenv *bdb.DbEnv) {
+	workWait.Add(1)
+	dbmap := make(map[string]*bdb.Db)
+	getdb := func(table string) (*bdb.Db, error) {
+		db := dbmap[table]
+		if db == nil {
+			var err error
+			db, err = dbenv.GetDb(table)
+			if err != nil {
+				log.Error("worker|GetDb|%s", err.Error())
+				return nil, err
+			}
+			dbmap[table] = db
 		}
+		return db, nil
 	}
-	err := db.Set(key, args[1])
-	if err != nil {
+	checkerr := func(err error, db *bdb.Db) {
 		if err == bdb.ErrRepDead {
+			delete(dbmap, db.Name)
 			db.Close()
-			delete(conn.dbmap, table)
 		}
-		log.Error("cmdGet|GetValue|%s", err.Error())
-		conn.wb.WriteString("-ERR dberr\r\n")
-		return nil
-	} else {
-		_, err := conn.wb.WriteString("+OK\r\n")
-		return err
 	}
+	for req := range workChan {
+		switch req := req.(type) {
+		case bdbSetReq:
+			db, err := getdb(req.table)
+			if db != nil {
+				req.resp <- bdbSetResp{err}
+			} else {
+				err := db.Set(req.key, req.value)
+				if err != nil {
+					checkerr(err, db)
+					req.resp <- bdbSetResp{err}
+				} else {
+					req.resp <- bdbSetResp{nil}
+				}
+			}
+		case bdbGetReq:
+			db, err := getdb(req.table)
+			if db != nil {
+				req.resp <- bdbGetResp{nil, err}
+			} else {
+				value, err := db.Get(req.key)
+				if err != nil {
+					if err == bdb.ErrNotFound {
+						req.resp <- bdbGetResp{nil, nil}
+					} else {
+						checkerr(err, db)
+						req.resp <- bdbGetResp{nil, err}
+					}
+				} else {
+					req.resp <- bdbGetResp{value, nil}
+				}
+			}
+		}
+	}
+	workWait.Done()
+}
+
+func cmdGet(conn *Conn, args [][]byte) error {
+	table, key := bdb.SplitKey(args[0])
+	respChan := make(chan bdbGetResp, 1)
+	workChan <- bdbGetReq{table, key, respChan}
+	resp := <-respChan
+	if resp.err != nil {
+		conn.wb.WriteString("-ERR dberr\r\n")
+	} else if resp.value == nil {
+		conn.wb.WriteString("$-1\r\n")
+	} else {
+		conn.writeLen('$', len(resp.value))
+		conn.wb.Write(resp.value)
+		conn.wb.WriteString("\r\n")
+	}
+	return nil
+}
+
+func cmdSet(conn *Conn, args [][]byte) error {
+	table, key := bdb.SplitKey(args[0])
+	respChan := make(chan bdbSetResp, 1)
+	workChan <- bdbSetReq{table, key, args[1], respChan}
+	resp := <-respChan
+	if resp.err != nil {
+		conn.wb.WriteString("-ERR dberr\r\n")
+	} else {
+		conn.wb.WriteString("+OK\r\n")
+	}
+	return nil
 }

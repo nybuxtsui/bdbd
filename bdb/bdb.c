@@ -92,13 +92,6 @@ env_get(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DB **out) {
         return ret;
     }
     /* Check this thread's PERM_FAILED indicator. */
-    if (shared_data->is_repmgr) {
-        pfinfo = (permfail_t *)thread_getspecific(permfail_key);
-        if (pfinfo->flag) {
-            printf("%s Thread: dbopen not durable.\n", pfinfo->thread_name);
-        }
-        pfinfo->flag = 0;
-    }
     *out = dbp;
     return 0;
 }

@@ -11,15 +11,16 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sync"
 	"syscall"
-	"time"
 )
 
 //var redisAddr = flag.String("l", ":2323", "redis listen port")
 
+import "C"
+
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU() * 4)
+
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -56,17 +57,29 @@ func main() {
 	dbenv := bdb.Start(config.Bdb)
 	mylog.Info("bdb|started")
 
-	connmap := make(map[net.Conn]struct{})
-	var connlock sync.Mutex
-	var listener *net.TCPListener
-	var wait sync.WaitGroup
+	/*
+		db, err := dbenv.GetDb("test")
+		if err != nil {
+			mylog.Fatal("dberr:%s", err.Error())
+		}
+		for i := 0; i < 1000000; i++ {
+			if i%1000 == 0 {
+				mylog.Info("%d", i)
+			}
+			k := fmt.Sprintf("k_%v", i)
+			db.Set([]byte(k), []byte(k))
+		}
+		db.Close()
+		dbenv.Exit()
+		mylog.Fatal("end")
+	*/
 
 	go func() {
 		addr, err := net.ResolveTCPAddr("tcp", config.Server.Listen)
 		if err != nil {
 			mylog.Fatal("ResolveTCPAddr|%s", err.Error())
 		}
-		listener, err = net.ListenTCP("tcp", addr)
+		listener, err := net.ListenTCP("tcp", addr)
 		if err != nil {
 			mylog.Fatal("Server|ListenTCP|%s", err.Error())
 		}
@@ -81,32 +94,18 @@ func main() {
 					continue
 				}
 			}
-			connlock.Lock()
-			connmap[client] = struct{}{}
-			connlock.Unlock()
-			wait.Add(1)
 			client.SetKeepAlive(true)
 			conn := server.NewConn(client, dbenv)
 			go func() {
 				conn.Start()
-				connlock.Lock()
-				delete(connmap, client)
-				connlock.Unlock()
-				wait.Done()
 			}()
 		}
 	}()
 
+	server.Start(dbenv)
 	mylog.Info("start")
 	<-signalChan
-
-	listener.Close()
-	time.Sleep(time.Millisecond * 10)
-	for k, _ := range connmap {
-		k.Close()
-	}
-	wait.Wait()
-
+	server.Exit()
 	dbenv.Exit()
 	mylog.Info("bye")
 }

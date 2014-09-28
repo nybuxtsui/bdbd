@@ -21,13 +21,12 @@ import (
 import "C"
 
 type BdbConfig struct {
-	UseRepMgr       bool
+	RepMgr          bool
 	AckAll          bool
 	Bulk            bool
 	Master          bool
 	HomeDir         string
 	LocalAddr       string
-	GroupCreator    bool
 	Priority        int
 	DisableElection bool
 	RemoteAddr      []string
@@ -44,7 +43,8 @@ type DbEnv struct {
 }
 
 type Db struct {
-	db *C.DB
+	Name string
+	db   *C.DB
 }
 
 var (
@@ -62,7 +62,7 @@ var (
 
 func Start(config BdbConfig) *DbEnv {
 	args := make([]string, 0, 20)
-	if config.AckAll && config.UseRepMgr {
+	if config.AckAll && config.RepMgr {
 		args = append(args, "-a")
 	}
 	if config.Bulk {
@@ -70,7 +70,7 @@ func Start(config BdbConfig) *DbEnv {
 	}
 	if config.Master {
 		args = append(args, "-M")
-	} else if !config.UseRepMgr {
+	} else if !config.RepMgr {
 		args = append(args, "-C")
 	}
 
@@ -81,7 +81,7 @@ func Start(config BdbConfig) *DbEnv {
 	if config.LocalAddr == "" {
 		log.Fatal("bdb|localaddr_missing")
 	}
-	if config.UseRepMgr && config.GroupCreator {
+	if config.RepMgr && config.Master {
 		args = append(args, "-L", config.LocalAddr)
 	} else {
 		args = append(args, "-l", config.LocalAddr)
@@ -93,7 +93,7 @@ func Start(config BdbConfig) *DbEnv {
 		args = append(args, "-p", strconv.FormatInt(int64(config.Priority), 10))
 	}
 
-	if config.UseRepMgr && config.RemotePeer != "" {
+	if config.RepMgr && config.RemotePeer != "" {
 		if len(config.RemoteAddr) != 0 {
 			log.Fatal("bdb|conflict_RemoteAddr_RemotePeer")
 		}
@@ -119,7 +119,7 @@ func Start(config BdbConfig) *DbEnv {
 		}
 		argv[0] = C.CString("bdbd")
 
-		if config.UseRepMgr {
+		if config.RepMgr {
 			log.Info("start_repmgr|%v", args)
 			C.start_mgr(C.int(len(argv)), &argv[0], unsafe.Pointer(dbenv))
 		} else {
@@ -201,7 +201,7 @@ func (dbenv *DbEnv) GetDb(name string) (*Db, error) {
 	ret := C.env_get(dbenv.env, dbenv.shared_data, (*C.char)(unsafe.Pointer(&cname[0])), &dbp)
 	err := ResultToError(ret)
 	if err == nil {
-		return &Db{db: dbp}, nil
+		return &Db{db: dbp, Name: name}, nil
 	} else {
 		return nil, err
 	}
