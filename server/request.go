@@ -79,7 +79,7 @@ func worker(dbenv *bdb.DbEnv) {
 		switch req := req.(type) {
 		case bdbSetReq:
 			db, err := getdb(req.table)
-			if db != nil {
+			if err != nil {
 				req.resp <- bdbSetResp{err}
 			} else {
 				err := db.Set(req.key, req.value)
@@ -92,7 +92,7 @@ func worker(dbenv *bdb.DbEnv) {
 			}
 		case bdbGetReq:
 			db, err := getdb(req.table)
-			if db != nil {
+			if err != nil {
 				req.resp <- bdbGetResp{nil, err}
 			} else {
 				value, err := db.Get(req.key)

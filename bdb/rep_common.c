@@ -569,8 +569,10 @@ env_init(dbenv, home)
 
     //TODO: set cachesize
 	//(void)dbenv->set_cachesize(dbenv, 0, CACHESIZE, 0);
+    //DB_TXN_NOSYNC在app/os崩溃时会丢失数据
+    //DB_TXN_WRITE_NOSYNC在os崩溃时会丢失数据
 	(void)dbenv->set_flags(dbenv, DB_TXN_NOSYNC, 1);
-	(void)dbenv->set_flags(dbenv, DB_TXN_WRITE_NOSYNC, 1);
+	//(void)dbenv->set_flags(dbenv, DB_TXN_WRITE_NOSYNC, 1);
 
 	flags = DB_CREATE | DB_INIT_LOCK | DB_INIT_LOG | DB_INIT_MPOOL |
 	    DB_INIT_REP | DB_INIT_TXN | DB_RECOVER | DB_THREAD;

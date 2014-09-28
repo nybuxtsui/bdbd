@@ -96,9 +96,7 @@ func main() {
 			}
 			client.SetKeepAlive(true)
 			conn := server.NewConn(client, dbenv)
-			go func() {
-				conn.Start()
-			}()
+			go conn.Start()
 		}
 	}()
 

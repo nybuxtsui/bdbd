@@ -197,7 +197,7 @@ func SplitKey(_key []byte) (string, []byte) {
 
 func (dbenv *DbEnv) GetDb(name string) (*Db, error) {
 	var dbp *C.DB
-	cname := []byte(name)
+	cname := []byte(name + ".db")
 	ret := C.env_get(dbenv.env, dbenv.shared_data, (*C.char)(unsafe.Pointer(&cname[0])), &dbp)
 	err := ResultToError(ret)
 	if err == nil {
