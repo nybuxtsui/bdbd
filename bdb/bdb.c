@@ -27,7 +27,8 @@ db_get(DB *dbp, char *_key, unsigned int keylen, char **_data, unsigned int *dat
     key.data = _key;
     key.size = keylen;
 
-    data.flags = DB_DBT_MALLOC;
+    data.flags = DB_DBT_REALLOC;
+    data.data = *_data;
 
     ret = dbp->get(dbp, NULL, &key, &data, 0);
     if (ret == 0) {

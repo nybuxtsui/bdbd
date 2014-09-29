@@ -4,7 +4,11 @@ import (
 	"github.com/nybuxtsui/bdbd/bdb"
 	"github.com/nybuxtsui/bdbd/log"
 	"sync"
+	"unsafe"
 )
+
+//#include <stdlib.h>
+import "C"
 
 type cmdDef struct {
 	fun     func(*Conn, [][]byte) error
@@ -44,7 +48,7 @@ var workChan = make(chan interface{}, 10000)
 
 func Start(dbenv *bdb.DbEnv) {
 	for i := 0; i < 4; i++ {
-		go worker(dbenv)
+		go worker(i, dbenv)
 	}
 }
 
@@ -53,7 +57,7 @@ func Exit() {
 	workWait.Wait()
 }
 
-func worker(dbenv *bdb.DbEnv) {
+func worker(id int, dbenv *bdb.DbEnv) {
 	workWait.Add(1)
 	dbmap := make(map[string]*bdb.Db)
 	getdb := func(table string) (*bdb.Db, error) {
@@ -75,6 +79,12 @@ func worker(dbenv *bdb.DbEnv) {
 			db.Close()
 		}
 	}
+	var getbuff uintptr = 0
+	defer func() {
+		if getbuff != 0 {
+			C.free(unsafe.Pointer(getbuff))
+		}
+	}()
 	for req := range workChan {
 		switch req := req.(type) {
 		case bdbSetReq:
@@ -95,7 +105,7 @@ func worker(dbenv *bdb.DbEnv) {
 			if err != nil {
 				req.resp <- bdbGetResp{nil, err}
 			} else {
-				value, err := db.Get(req.key)
+				value, err := db.Get(req.key, &getbuff)
 				if err != nil {
 					if err == bdb.ErrNotFound {
 						req.resp <- bdbGetResp{nil, nil}
@@ -113,6 +123,7 @@ func worker(dbenv *bdb.DbEnv) {
 }
 
 func cmdGet(conn *Conn, args [][]byte) error {
+	log.Debug("cmdGet|%s", args[0])
 	table, key := bdb.SplitKey(args[0])
 	respChan := make(chan bdbGetResp, 1)
 	workChan <- bdbGetReq{table, key, respChan}
@@ -130,6 +141,7 @@ func cmdGet(conn *Conn, args [][]byte) error {
 }
 
 func cmdSet(conn *Conn, args [][]byte) error {
+	log.Debug("cmdSet|%s|%v", args[0], args[1])
 	table, key := bdb.SplitKey(args[0])
 	respChan := make(chan bdbSetResp, 1)
 	workChan <- bdbSetReq{table, key, args[1], respChan}

@@ -223,8 +223,8 @@ func (db *Db) Set(key []byte, value []byte) error {
 	return ResultToError(ret)
 }
 
-func (db *Db) Get(key []byte) ([]byte, error) {
-	var data *C.char
+func (db *Db) Get(key []byte, getbuff *uintptr) ([]byte, error) {
+	var data *C.char = (*C.char)(unsafe.Pointer(*getbuff))
 	var datalen C.uint
 
 	ret := C.db_get(
@@ -236,11 +236,12 @@ func (db *Db) Get(key []byte) ([]byte, error) {
 	)
 	err := ResultToError(ret)
 	if err == nil {
+		*getbuff = uintptr(unsafe.Pointer(data))
 		if data == nil {
 			return nil, nil
 		} else {
 			r := C.GoBytes(unsafe.Pointer(data), C.int(datalen))
-			C.free(unsafe.Pointer(data))
+			//C.free(unsafe.Pointer(data))
 			return r, nil
 		}
 	}
