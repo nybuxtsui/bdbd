@@ -178,9 +178,12 @@ start_base(argc, argv, ptr)
 		goto err;
 	}
 
+    Info("bdb|closing");
+
 	machtab_destroy(machtab);
 
 	/* Finish checkpoint and log archive threads. */
+    Info("bdb|finish_support_threads");
 	if ((ret = finish_support_threads(&ckp_thr, &lga_thr)) != 0)
 		goto err;
 
@@ -204,13 +207,18 @@ start_base(argc, argv, ptr)
 	 * gracefully, we push out the end of the log here so that the most
 	 * recent transactions don't mysteriously disappear.
 	 */
-	if ((ret = dbenv->log_flush(dbenv, NULL)) != 0)
+    Info("bdb|log_flush");
+	if ((ret = dbenv->log_flush(dbenv, NULL)) != 0) {
 		dbenv->err(dbenv, ret, "log_flush");
+    }
 
-err:	if (machtab != NULL)
+err:
+    if (machtab != NULL)
 		free(machtab);
-	if (dbenv != NULL)
+	if (dbenv != NULL) {
+        Info("bdb|env|closing");
 		(void)dbenv->close(dbenv, 0);
+    }
 #ifdef _WIN32
 	/* Shut down the Windows sockets DLL. */
 	(void)WSACleanup();

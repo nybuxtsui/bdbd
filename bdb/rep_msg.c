@@ -216,6 +216,9 @@ hm_loop(args)
 				}
 			}
 			break;
+        case DB_REP_NOTPERM:
+            // ignore this message
+            break;
 		default:
 			dbenv->err(dbenv, r, "DB_ENV->rep_process_message");
 			break;

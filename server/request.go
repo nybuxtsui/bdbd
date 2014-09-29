@@ -81,9 +81,14 @@ func worker(id int, dbenv *bdb.DbEnv) {
 	}
 	var getbuff uintptr = 0
 	defer func() {
+		for _, db := range dbmap {
+			db.Close()
+		}
 		if getbuff != 0 {
 			C.free(unsafe.Pointer(getbuff))
 		}
+		log.Info("server|close|work|%d", id)
+		workWait.Done()
 	}()
 	for req := range workChan {
 		switch req := req.(type) {
@@ -119,7 +124,6 @@ func worker(id int, dbenv *bdb.DbEnv) {
 			}
 		}
 	}
-	workWait.Done()
 }
 
 func cmdGet(conn *Conn, args [][]byte) error {

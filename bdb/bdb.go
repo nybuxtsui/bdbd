@@ -11,7 +11,7 @@ import (
 )
 
 /*
-#cgo CFLAGS: -I/home/xubin/local/bdb/include
+#cgo CFLAGS: -O3 -I/home/xubin/local/bdb/include
 #cgo LDFLAGS: -L/home/xubin/local/bdb/lib
 #cgo LDFLAGS: -l:libdb.a
 #include <stdlib.h>
@@ -150,6 +150,20 @@ func Wait(env *C.DB_ENV, shared_data *C.SHARED_DATA, ptr unsafe.Pointer) {
 
 	dbenv.waitReady.Done()
 	dbenv.waitStop.Wait()
+}
+
+//export Info
+func Info(msg *C.char) {
+	log.Info(C.GoString(msg))
+}
+
+//export Error
+func Error(msg *C.char, arg *C.char) {
+	if arg != nil {
+		log.Error(C.GoString(msg))
+	} else {
+		log.Error(C.GoString(msg), C.GoString(arg))
+	}
 }
 
 func ResultToError(r C.int) error {

@@ -115,6 +115,10 @@ start_mgr(argc, argv, ptr)
 	    10000000)) != 0)
 		dbenv->err(dbenv, ret,
 		    "Could not set heartbeat monitor timeout.\n");
+	if ((ret = dbenv->rep_set_timeout(dbenv, DB_REP_ACK_TIMEOUT,
+	    5000000)) != 0)
+		dbenv->err(dbenv, ret,
+		    "Could not set ack timeout.\n");
 
 	/* Create thread-specific data key for PERM_FAILED structure. */
 	if ((ret = thread_key_create(&permfail_key)) != 0)
@@ -151,7 +155,10 @@ start_mgr(argc, argv, ptr)
 		goto err;
 	}
 
+    Info("bdb|closing");
+
 	/* Finish checkpoint and log archive threads. */
+    Info("bdb|finish_support_threads");
 	if ((ret = finish_support_threads(&ckp_thr, &lga_thr)) != 0)
 		goto err;
 
@@ -164,6 +171,7 @@ start_mgr(argc, argv, ptr)
 	 * gracefully, we push out the end of the log here so that the most
 	 * recent transactions don't mysteriously disappear.
 	 */
+    Info("bdb|log_flush");
 	if ((ret = dbenv->log_flush(dbenv, NULL)) != 0) {
 		dbenv->err(dbenv, ret, "log_flush");
 		goto err;
@@ -174,12 +182,14 @@ start_mgr(argc, argv, ptr)
 		goto err;
 
 err:
-	if (dbenv != NULL &&
-	    (t_ret = dbenv->close(dbenv, 0)) != 0) {
-		fprintf(stderr, "failure closing env: %s (%d)\n",
-		    db_strerror(t_ret), t_ret);
-		if (ret == 0)
-			ret = t_ret;
+	if (dbenv != NULL) {
+        Info("bdb|env|closing");
+        if (t_ret = dbenv->close(dbenv, 0) != 0) {
+            fprintf(stderr, "failure closing env: %s (%d)\n", db_strerror(t_ret), t_ret);
+            if (ret == 0) {
+                ret = t_ret;
+            }
+        }
 	}
 
 	return (ret);

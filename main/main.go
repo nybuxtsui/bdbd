@@ -86,13 +86,7 @@ func main() {
 		for {
 			client, err := listener.AcceptTCP()
 			if err != nil {
-				if err.Error() == "use of closed network connection" {
-					mylog.Info("Server|closing")
-					break
-				} else {
-					mylog.Error("Server|%s", err.Error())
-					continue
-				}
+				mylog.Error("Server|%s", err.Error())
 			}
 			client.SetKeepAlive(true)
 			conn := server.NewConn(client, dbenv)

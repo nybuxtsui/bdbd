@@ -1,4 +1,6 @@
-set_cachesize 2 0 2
-set_lg_regionmax 10000000
-mutex_set_max 500000
-set_tx_max 5000
+set_cachesize 1 0 1
+set_lg_regionmax 524288
+#rep_set_timeout DB_REP_HEARTBEAT_SEND 5000000
+#rep_set_timeout DB_REP_HEARTBEAT_MONITOR 50000000
+#rep_set_timeout DB_REP_ACK_TIMEOUT 50000000
+
