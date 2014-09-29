@@ -11,8 +11,7 @@ import (
 )
 
 /*
-#cgo CFLAGS: -O3 -I/home/xubin/local/bdb/include
-#cgo LDFLAGS: -L/home/xubin/local/bdb/lib
+#cgo CFLAGS: -O2
 #cgo LDFLAGS: -l:libdb.a
 #include <stdlib.h>
 #include <errno.h>
