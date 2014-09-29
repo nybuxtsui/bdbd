@@ -3,6 +3,7 @@ package bdb
 import (
 	"errors"
 	"github.com/nybuxtsui/bdbd/log"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -78,6 +79,10 @@ func Start(config BdbConfig) *DbEnv {
 		log.Fatal("bdb|homedir_missing")
 	}
 	args = append(args, "-h", config.HomeDir)
+	_, err := os.Stat(config.HomeDir)
+	if err != nil && os.IsNotExist(err) {
+		os.Mkdir(config.HomeDir, os.ModePerm)
+	}
 	if config.LocalAddr == "" {
 		log.Fatal("bdb|localaddr_missing")
 	}
