@@ -15,10 +15,18 @@ import (
 #cgo LDFLAGS: -l:libdb.a
 #include <stdlib.h>
 #include <errno.h>
-#include <db.h>
 #include "bdb.h"
 */
 import "C"
+
+const (
+	DBTYPE_BTREE   = 1
+	DBTYPE_HASH    = 2
+	DBTYPE_HEAP    = 6
+	DBTYPE_RECNO   = 3
+	DBTYPE_QUEUE   = 4
+	DBTYPE_UNKNOWN = 5
+)
 
 type BdbConfig struct {
 	RepMgr          bool
@@ -191,32 +199,36 @@ func ResultToError(r C.int) error {
 }
 
 func SplitKey(_key []byte) (string, []byte) {
-	var table string = ""
-	var name []byte = nil
-	for i := 0; i < len(_key); i++ {
-		if _key[i] == ':' {
-			table = string(_key[:i])
-			name = _key[i+1:]
-			break
-		}
-	}
-	if table == "" && name == nil {
-		table = "__default__"
-		name = _key
-	}
-	if len(table) == 0 {
-		table = "__default__"
-	}
-	if len(name) == 0 {
-		name = []byte{0}
-	}
+	var _table *C.char
+	var _name *C.char
+	var namelen C.int
+	C.split_key(
+		(*C.char)(unsafe.Pointer(&_key[0])),
+		C.int(len(_key)),
+		&_table,
+		&_name,
+		&namelen,
+	)
+	table := C.GoString(_table)
+	name := C.GoBytes(unsafe.Pointer(_name), namelen)
+
+	C.free(unsafe.Pointer(_table))
+	C.free(unsafe.Pointer(_name))
+
 	return table, name
 }
 
-func (dbenv *DbEnv) GetDb(name string) (*Db, error) {
+func (dbenv *DbEnv) GetDb(name string, dbtype int) (*Db, error) {
 	var dbp *C.DB
 	cname := []byte(name + ".db")
-	ret := C.env_get(dbenv.env, dbenv.shared_data, (*C.char)(unsafe.Pointer(&cname[0])), &dbp)
+	ret := C.get_db(
+		dbenv.env,
+		dbenv.shared_data,
+		(*C.char)(unsafe.Pointer(&cname[0])),
+		C.DBTYPE(dbtype),
+		0,
+		&dbp,
+	)
 	err := ResultToError(ret)
 	if err == nil {
 		return &Db{db: dbp, Name: name}, nil
@@ -293,4 +305,27 @@ func (db *Db) Close() {
 			time.Sleep(time.Millisecond)
 		}
 	}()
+}
+
+func (dbenv *DbEnv) CheckExpire() error {
+	var dbp *C.DB
+	cname := []byte("__expire.db")
+	ret := C.get_db(
+		dbenv.env,
+		dbenv.shared_data,
+		(*C.char)(unsafe.Pointer(&cname[0])),
+		C.DBTYPE(DBTYPE_BTREE),
+		0,
+		&dbp,
+	)
+	err := ResultToError(ret)
+	if err != nil {
+		return err
+	}
+	/*
+			db := &Db{db: dbp, Name: "__expire"}
+		    for {
+		    }
+	*/
+	return nil
 }

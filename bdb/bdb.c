@@ -1,7 +1,9 @@
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <db.h>
 #include "rep_common.h"
+#include "uthash.h"
 
 int
 db_close(DB *dbp) {
@@ -60,7 +62,7 @@ db_put(DB *dbp, char *_key, unsigned int keylen, char *_data, unsigned int datal
 }
 
 int
-env_get(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DB **out) {
+get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype, unsigned int myflags, DB **out) {
     DB *dbp;
     int ret;
 	u_int32_t flags;
@@ -70,7 +72,7 @@ env_get(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DB **out) {
     if ((ret = db_create(&dbp, dbenv, 0)) != 0)
         return (ret);
 
-    flags = DB_AUTO_COMMIT | DB_READ_UNCOMMITTED | DB_THREAD;
+    flags = DB_AUTO_COMMIT | DB_READ_UNCOMMITTED | DB_THREAD | myflags;
     /*
      * Open database with DB_CREATE only if this is
      * a master database.  A client database uses
@@ -83,8 +85,9 @@ env_get(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DB **out) {
      * there, it would never need to open it with
      * DB_CREATE.
      */
-    if (shared_data->is_master)
+    if (dbtype != DB_UNKNOWN && shared_data->is_master) {
         flags |= DB_CREATE;
+    }
     if ((ret = dbp->open(dbp, NULL, name, NULL, DB_HASH, flags, 0)) != 0) {
         dbenv->err(dbenv, ret, "DB->open");
         if ((ret = dbp->close(dbp, 0)) != 0) {
@@ -95,4 +98,148 @@ env_get(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DB **out) {
     /* Check this thread's PERM_FAILED indicator. */
     *out = dbp;
     return 0;
+}
+
+struct expire_key {
+    time_t t;
+    unsigned int seq;
+};
+
+static int
+expire_key_compare_fcn(DB *db, const DBT *a, const DBT *b, size_t *locp) {
+    struct expire_key ai, bi;
+    memcpy(&ai, a->data, sizeof ai);
+    memcpy(&bi, b->data, sizeof bi);
+    time_t r = ai.t - bi.t;
+    return (r > 0) ? 1 : ((r < 0) ? -1 : 0);
+}
+
+void
+split_key(char *_key, int keylen, char **table, char **name, int *namelen) {
+    int i;
+
+    *name = NULL;
+    *table = NULL;
+	for (i = 0; i < keylen; ++i) {
+		if (_key[i] == ':') {
+            if (i != 0) {
+                *table = strndup(_key, i);
+            }
+            *namelen = keylen - i - 1;
+            if (*namelen != 0) {
+                *name = strndup(_key + i + 1, keylen - i - 1);
+            }
+			break;
+		}
+	}
+	if (*table == NULL && *name == NULL) {
+		*table = strdup("__default");
+        *namelen = keylen;
+		*name = malloc(*namelen);
+        memcpy(name, _key, keylen);
+	}
+	if (table == NULL) {
+		*table = strdup("__default");
+	}
+	if (*name == NULL) {
+        *namelen = 1;
+		*name = malloc(*namelen);
+        *name[0] = 0;
+	}
+}
+
+#define EXPIRE_KEY_MAX 100
+int
+check_expire(DB_ENV *dbenv, SHARED_DATA *shared_data) {
+    DBC *cur;
+    DBT key, data;
+    int ret, i, expire_key_count;
+    time_t now;
+    struct expire_key keydata;
+    char *data_buff, *expire_key[EXPIRE_KEY_MAX];
+    DB *expire_db;
+    struct {
+        char key[128];
+        DB *db;
+        UT_hash_handle hh;
+    } *dbmap, *dbmap_item, *dbmap_tmp;
+
+    dbmap = NULL;
+
+    // 打开expire数据库
+    for (;;) {
+        if (shared_data->app_finished == 1) {
+            return;
+        }
+        ret = get_db(dbenv, shared_data, "__expire.db", DB_BTREE, 0, &expire_db);
+        if (ret != 0) {
+            dbenv->err(dbenv, ret, "Could not open expire db.");
+            sleep(1);
+        }
+        break;
+    }
+    expire_db->set_dup_compare(expire_db, expire_key_compare_fcn);
+
+    // 初始化realloc缓存
+    data_buff = NULL;
+    for (i = 0; i < EXPIRE_KEY_MAX; ++i) {
+        expire_key[i] = NULL;
+    }
+
+    for (;;) {
+        sleep(1);
+        if (shared_data->app_finished == 1) {
+            break;
+        }
+        ret = expire_db->cursor(expire_db, NULL, &cur, DB_READ_UNCOMMITTED);
+        if (ret != 0) {
+            expire_db->err(expire_db, ret, "Could not open cursor.");
+            continue;
+        }
+
+        memset(&key, 0, sizeof key);
+        memset(&data, 0, sizeof data);
+        data.flags = DB_DBT_REALLOC;
+        data.data = data_buff;
+        key.flags = DB_DBT_USERMEM;
+        key.data = &keydata;
+
+        expire_key_count = 0;
+        time(&now);
+        while ((ret = cur->get(cur, &key, &data, DB_NEXT)) == 0) {
+            struct expire_key *k = (struct expire_key *)key.data;
+            if (k->t > now) {
+                // expire表中的数据是按照时间排序的
+                // t 大于now表示后面不会再有超时的数据了
+                break;
+            }
+            expire_key[expire_key_count] = realloc(expire_key[expire_key_count], data.size);
+            memcpy(expire_key[expire_key_count], data.data, data.size);
+            ++expire_key_count;
+            if (expire_key_count >= EXPIRE_KEY_MAX) {
+                // 每批处理EXPIRE_KEY_MAX条记录
+                // 避免锁表时间太长
+                break;
+            }
+        }
+        cur->close(cur);
+
+        for (i = 0; i < expire_key_count; ++i) {
+        }
+    }
+
+    if (data_buff) {
+        free(data_buff);
+    }
+    for (i = 0; i < EXPIRE_KEY_MAX; ++i) {
+        if (expire_key[i]) {
+            free(expire_key[i]);
+        }
+    }
+    HASH_ITER(hh, dbmap, dbmap_item, dbmap_tmp) {
+        HASH_DEL(dbmap, dbmap_item);
+        db_close(dbmap_item->db);
+        free(dbmap_item);
+    }
+    db_close(expire_db);
 }

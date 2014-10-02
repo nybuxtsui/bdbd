@@ -8,5 +8,8 @@ int db_get(DB *dbp, char *_key, unsigned int keylen, char **_data, unsigned int 
 int db_put(DB *dbp, char *_key, unsigned int keylen, char *_data, unsigned int datalen);
 int db_close(DB *dbp);
 
-int env_get(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DB **out);
+int get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DBTYPE dbtype, unsigned int myflags, DB **out);
 int is_finished(SHARED_DATA *shared_data);
+
+int check_expire(DB *dbp);
+void split_key(char *_key, int keylen, char **table, char **name, int *namelen);

@@ -60,11 +60,11 @@ func Exit() {
 func worker(id int, dbenv *bdb.DbEnv) {
 	workWait.Add(1)
 	dbmap := make(map[string]*bdb.Db)
-	getdb := func(table string) (*bdb.Db, error) {
+	getdb := func(table string, dbtype int) (*bdb.Db, error) {
 		db := dbmap[table]
 		if db == nil {
 			var err error
-			db, err = dbenv.GetDb(table)
+			db, err = dbenv.GetDb(table, dbtype)
 			if err != nil {
 				log.Error("worker|GetDb|%s", err.Error())
 				return nil, err
@@ -93,7 +93,7 @@ func worker(id int, dbenv *bdb.DbEnv) {
 	for req := range workChan {
 		switch req := req.(type) {
 		case bdbSetReq:
-			db, err := getdb(req.table)
+			db, err := getdb(req.table, bdb.DBTYPE_HASH)
 			if err != nil {
 				req.resp <- bdbSetResp{err}
 			} else {
@@ -106,7 +106,7 @@ func worker(id int, dbenv *bdb.DbEnv) {
 				}
 			}
 		case bdbGetReq:
-			db, err := getdb(req.table)
+			db, err := getdb(req.table, bdb.DBTYPE_HASH)
 			if err != nil {
 				req.resp <- bdbGetResp{nil, err}
 			} else {
