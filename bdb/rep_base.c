@@ -40,7 +40,7 @@ start_base(argc, argv, ptr)
 	connect_args ca;
 	supthr_args supa;
 	machtab_t *machtab;
-	thread_t all_thr, ckp_thr, conn_thr, lga_thr;
+	thread_t all_thr, ckp_thr, conn_thr, lga_thr, exp_thr;
 	void *astatus, *cstatus;
 #ifdef _WIN32
 	WSADATA wsaData;
@@ -139,7 +139,7 @@ start_base(argc, argv, ptr)
 	/* Start checkpoint and log archive threads. */
 	supa.dbenv = dbenv;
 	supa.shared = &my_app_data.shared_data;
-	if ((ret = start_support_threads(dbenv, &supa, &ckp_thr, &lga_thr))
+	if ((ret = start_support_threads(dbenv, &supa, &ckp_thr, &lga_thr, &exp_thr))
 	    != 0)
 		goto err;
 
@@ -184,7 +184,7 @@ start_base(argc, argv, ptr)
 
 	/* Finish checkpoint and log archive threads. */
     Info("bdb|finish_support_threads");
-	if ((ret = finish_support_threads(&ckp_thr, &lga_thr)) != 0)
+	if ((ret = finish_support_threads(&ckp_thr, &lga_thr, &exp_thr)) != 0)
 		goto err;
 
 	/* Wait on the connection threads. */

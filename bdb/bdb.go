@@ -12,6 +12,7 @@ import (
 
 /*
 #cgo CFLAGS: -O2
+#cgo CXXFLAGS: -O2 -std=c++11
 #cgo LDFLAGS: -l:libdb.a
 #include <stdlib.h>
 #include <errno.h>
@@ -226,8 +227,9 @@ func (dbenv *DbEnv) GetDb(name string, dbtype int) (*Db, error) {
 		dbenv.env,
 		dbenv.shared_data,
 		(*C.char)(unsafe.Pointer(&cname[0])),
-		C.DBTYPE(dbtype),
+		C.int(dbtype),
 		0,
+		unsafe.Pointer(uintptr(0)),
 		&dbp,
 	)
 	err := ResultToError(ret)
@@ -315,8 +317,9 @@ func (dbenv *DbEnv) CheckExpire() error {
 		dbenv.env,
 		dbenv.shared_data,
 		(*C.char)(unsafe.Pointer(&cname[0])),
-		C.DBTYPE(DBTYPE_BTREE),
+		C.int(DBTYPE_BTREE),
 		0,
+		unsafe.Pointer(uintptr(0)),
 		&dbp,
 	)
 	err := ResultToError(ret)

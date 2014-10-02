@@ -311,18 +311,25 @@ print_stocks(dbp)
 }
 
 /* Start checkpoint and log archive support threads. */
+void *
+expire_thread(void *args);
+
 int
-start_support_threads(dbenv, sup_args, ckp_thr, lga_thr)
+start_support_threads(dbenv, sup_args, ckp_thr, lga_thr, exp_thr)
 	DB_ENV *dbenv;
 	supthr_args *sup_args;
 	thread_t *ckp_thr;
 	thread_t *lga_thr;
+    thread_t *exp_thr;
 {
 	int ret;
 
 	ret = 0;
-	if ((ret = thread_create(ckp_thr, NULL, checkpoint_thread,
-	    sup_args)) != 0) {
+	if ((ret = thread_create(exp_thr, NULL, expire_thread, sup_args)) != 0) {
+		dbenv->errx(dbenv, "can't create expire thread");
+		goto err;
+	}
+	if ((ret = thread_create(ckp_thr, NULL, checkpoint_thread, sup_args)) != 0) {
 		dbenv->errx(dbenv, "can't create checkpoint thread");
 		goto err;
 	}
@@ -336,20 +343,23 @@ err:
 
 /* Wait for checkpoint and log archive support threads to finish. */
 int
-finish_support_threads(ckp_thr, lga_thr)
+finish_support_threads(ckp_thr, lga_thr, exp_thr)
 	thread_t *ckp_thr;
 	thread_t *lga_thr;
+	thread_t *exp_thr;
 {
-	void *ctstatus, *ltstatus;
+	void *ctstatus, *ltstatus, *exstatus;
 	int ret;
 
 	ret = 0;
 	if (thread_join(*lga_thr, &ltstatus) ||
+        thread_join(*exp_thr, &exstatus) ||
 	    thread_join(*ckp_thr, &ctstatus)) {
 		ret = -1;
 		goto err;
 	}
 	if ((uintptr_t)ltstatus != EXIT_SUCCESS ||
+        (uintptr_t)exstatus != EXIT_SUCCESS ||
 	    (uintptr_t)ctstatus != EXIT_SUCCESS)
 		ret = -1;
 err:

@@ -37,7 +37,7 @@ start_mgr(argc, argv, ptr)
 	SETUP_DATA setup_info;
 	repsite_t *site_list;
 	APP_DATA my_app_data;
-	thread_t ckp_thr, lga_thr;
+	thread_t ckp_thr, lga_thr, exp_thr;
 	supthr_args sup_args;
 	u_int32_t start_policy;
 	int i, ret, t_ret;
@@ -144,7 +144,7 @@ start_mgr(argc, argv, ptr)
 	sup_args.shared = &my_app_data.shared_data;
 	my_app_data.shared_data.is_repmgr = 1;
 	if ((ret = start_support_threads(dbenv, &sup_args, &ckp_thr,
-	    &lga_thr)) != 0)
+	    &lga_thr, &exp_thr)) != 0)
 		goto err;
 
 	if ((ret = dbenv->repmgr_start(dbenv, 3, start_policy)) != 0)
@@ -159,7 +159,7 @@ start_mgr(argc, argv, ptr)
 
 	/* Finish checkpoint and log archive threads. */
     Info("bdb|finish_support_threads");
-	if ((ret = finish_support_threads(&ckp_thr, &lga_thr)) != 0)
+	if ((ret = finish_support_threads(&ckp_thr, &lga_thr, &exp_thr)) != 0)
 		goto err;
 
 	/*

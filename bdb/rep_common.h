@@ -105,9 +105,9 @@ int common_rep_setup __P((DB_ENV *, int, char *[], SETUP_DATA *));
 int create_env __P((const char *, DB_ENV **));
 int doloop __P((DB_ENV *, SHARED_DATA *, void *));
 int env_init __P((DB_ENV *, const char *));
-int finish_support_threads __P((thread_t *, thread_t *));
+int finish_support_threads __P((thread_t *, thread_t *, thread_t *));
 void *log_archive_thread __P((void *));
 int start_support_threads __P((DB_ENV *, supthr_args *, thread_t *,
-    thread_t *));
+    thread_t *, thread_t *));
 void usage __P((const int, const char *));
 #endif
