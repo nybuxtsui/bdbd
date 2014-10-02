@@ -200,20 +200,21 @@ func ResultToError(r C.int) error {
 
 func SplitKey(_key []byte) (string, []byte) {
 	var _table *C.char
+	var tablelen C.int
 	var _name *C.char
 	var namelen C.int
 	C.split_key(
 		(*C.char)(unsafe.Pointer(&_key[0])),
 		C.int(len(_key)),
 		&_table,
+		&tablelen,
 		&_name,
 		&namelen,
 	)
-	table := C.GoString(_table)
+	table := C.GoStringN(_table, tablelen)
 	name := C.GoBytes(unsafe.Pointer(_name), namelen)
 
-	C.free(unsafe.Pointer(_table))
-	C.free(unsafe.Pointer(_name))
+	log.Info("%s,%s", table, name)
 
 	return table, name
 }

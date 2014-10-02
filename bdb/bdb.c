@@ -114,8 +114,9 @@ expire_key_compare_fcn(DB *db, const DBT *a, const DBT *b, size_t *locp) {
     return (r > 0) ? 1 : ((r < 0) ? -1 : 0);
 }
 
+#define DEFAULT_TABLE "__table"
 void
-split_key(char *_key, int keylen, char **table, char **name, int *namelen) {
+split_key(char *_key, int keylen, char **table, int *tablelen, char **name, int *namelen) {
     int i;
 
     *name = NULL;
@@ -123,28 +124,29 @@ split_key(char *_key, int keylen, char **table, char **name, int *namelen) {
 	for (i = 0; i < keylen; ++i) {
 		if (_key[i] == ':') {
             if (i != 0) {
-                *table = strndup(_key, i);
+                *table = _key;
+                *tablelen = i;
             }
             *namelen = keylen - i - 1;
             if (*namelen != 0) {
-                *name = strndup(_key + i + 1, keylen - i - 1);
+                *name = _key + i + 1;
             }
 			break;
 		}
 	}
 	if (*table == NULL && *name == NULL) {
-		*table = strdup("__default");
+		*table = DEFAULT_TABLE;
+        *tablelen = (sizeof DEFAULT_TABLE) - 1;
+		*name = _key;
         *namelen = keylen;
-		*name = malloc(*namelen);
-        memcpy(name, _key, keylen);
 	}
 	if (table == NULL) {
-		*table = strdup("__default");
+		*table = DEFAULT_TABLE;
+        *tablelen = (sizeof DEFAULT_TABLE) - 1;
 	}
 	if (*name == NULL) {
+        *name = "\0";
         *namelen = 1;
-		*name = malloc(*namelen);
-        *name[0] = 0;
 	}
 }
 

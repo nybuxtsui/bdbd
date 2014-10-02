@@ -12,4 +12,4 @@ int get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, DBTYPE dbt
 int is_finished(SHARED_DATA *shared_data);
 
 int check_expire(DB *dbp);
-void split_key(char *_key, int keylen, char **table, char **name, int *namelen);
+void split_key(char *_key, int keylen, char **table, int *tablelen, char **name, int *namelen);
