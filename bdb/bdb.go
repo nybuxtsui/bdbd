@@ -228,8 +228,6 @@ func (dbenv *DbEnv) GetDb(name string, dbtype int) (*Db, error) {
 		dbenv.shared_data,
 		(*C.char)(unsafe.Pointer(&cname[0])),
 		C.int(dbtype),
-		0,
-		unsafe.Pointer(uintptr(0)),
 		&dbp,
 	)
 	err := ResultToError(ret)
@@ -308,28 +306,4 @@ func (db *Db) Close() {
 			time.Sleep(time.Millisecond)
 		}
 	}()
-}
-
-func (dbenv *DbEnv) CheckExpire() error {
-	var dbp *C.DB
-	cname := []byte("__expire.db")
-	ret := C.get_db(
-		dbenv.env,
-		dbenv.shared_data,
-		(*C.char)(unsafe.Pointer(&cname[0])),
-		C.int(DBTYPE_BTREE),
-		0,
-		unsafe.Pointer(uintptr(0)),
-		&dbp,
-	)
-	err := ResultToError(ret)
-	if err != nil {
-		return err
-	}
-	/*
-			db := &Db{db: dbp, Name: "__expire"}
-		    for {
-		    }
-	*/
-	return nil
 }
