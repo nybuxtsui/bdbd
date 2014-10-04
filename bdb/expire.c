@@ -80,7 +80,7 @@ get_target_db(supthr_args *args, DBC *cur, dbmap_t dbmap, const char *table) {
     return db;
 }
 
-extern "C" int
+int
 expire_thread(void *_args) {
 	supthr_args *args;
     DB_ENV *dbenv;
