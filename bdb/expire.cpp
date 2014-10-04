@@ -28,6 +28,13 @@ open_expire_db(supthr_args *args) {
     }
 }
 
+static void
+get_expire_id(const char *key) {
+    DB *db;
+    int ret;
+
+}
+
 static DB *
 get_target_expire_db(supthr_args *args, dbmap_t dbmap, const char *table) {
     DB *db;
@@ -73,7 +80,7 @@ get_target_db(supthr_args *args, DBC *cur, dbmap_t dbmap, const char *table) {
     return db;
 }
 
-int
+extern "C" int
 expire_thread(void *_args) {
 	supthr_args *args;
     DB_ENV *dbenv;
@@ -84,7 +91,7 @@ expire_thread(void *_args) {
     time_t now;
     struct expire_key keydata;
     char *data_buff, *table, *name;
-    DB *expire_db, *db;
+    DB *expire_db, *target_db, *target_expire_db;
     dbmap_t dbmap;
 
 	args = (supthr_args *)_args;
@@ -137,17 +144,20 @@ expire_thread(void *_args) {
             if (k->t > now) { // 记录尚未超时
                 break;
             }
-            split_key(data.data, data.size, &table, &tablelen, &name, &namelen);
-            db = get_target_db(args, cur, dbmap, table);
-            if (db == NULL) {
+            split_key((char*)data.data, data.size, &table, &tablelen, &name, &namelen);
+            target_db = get_target_db(args, cur, dbmap, table);
+            if (target_db == NULL) {
                 break;
+            }
+            target_expire_db = get_target_expire_db(args, dbmap, table);
+            if (target_expire_db) {
             }
 
             memset(&delkey, 0, sizeof delkey);
             delkey.data = name;
             delkey.size = namelen;
 
-            ret = db->del(db, NULL, &delkey, 0);
+            ret = target_db->del(target_db, NULL, &delkey, 0);
             if (ret == DB_NOTFOUND) {
             } else if (ret) {
                 if (ret == DB_REP_HANDLE_DEAD) {
@@ -166,3 +176,4 @@ expire_thread(void *_args) {
 
     return EXIT_SUCCESS;
 }
+

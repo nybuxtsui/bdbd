@@ -3,7 +3,7 @@
 #include <string.h>
 #include <db.h>
 #include "rep_common.h"
-#include "dbmap.h"
+#include "bdb.h"
 
 int
 db_close(DB *dbp) {
