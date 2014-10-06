@@ -27,6 +27,9 @@ const (
 	DBTYPE_RECNO   = 3
 	DBTYPE_QUEUE   = 4
 	DBTYPE_UNKNOWN = 5
+
+	DB_READ_COMMITTED   = C.DB_READ_COMMITTED
+	DB_READ_UNCOMMITTED = C.DB_READ_UNCOMMITTED
 )
 
 type BdbConfig struct {
@@ -54,6 +57,10 @@ type DbEnv struct {
 type Db struct {
 	Name string
 	db   *C.DB
+}
+
+type Txn struct {
+	txn *C.DB_TXN
 }
 
 var (
@@ -166,12 +173,13 @@ func Info(msg *C.char) {
 }
 
 //export Error
-func Error(msg *C.char, arg *C.char) {
-	if arg != nil {
-		log.Error(C.GoString(msg))
-	} else {
-		log.Error(C.GoString(msg), C.GoString(arg))
-	}
+func Error(msg *C.char) {
+	log.Error(C.GoString(msg))
+}
+
+//export Debug
+func Debug(msg *C.char) {
+	log.Debug(C.GoString(msg))
 }
 
 func ResultToError(r C.int) error {
@@ -243,9 +251,48 @@ func (dbenv *DbEnv) Exit() {
 	dbenv.waitExit.Wait()
 }
 
-func (db *Db) Set(key []byte, value []byte) error {
+func (dbenv *DbEnv) Begin(flags uint32) (*Txn, error) {
+	txn := new(Txn)
+	ret := C.txn_begin(dbenv.env, &txn.txn, C.uint(flags))
+	if err := ResultToError(ret); err != nil {
+		return nil, err
+	} else {
+		return txn, nil
+	}
+}
+
+func (txn *Txn) Commit() error {
+	ret := C.txn_commit(txn.txn)
+	return ResultToError(ret)
+}
+
+func (txn *Txn) Abort() error {
+	ret := C.txn_abort(txn.txn)
+	return ResultToError(ret)
+}
+
+func SetExpire(expiredb *Db, indexdb *Db, txn *Txn, key []byte, sec uint32, seq uint32, tid uint32) error {
+	ret := C.db_set_expire(
+		expiredb.db,
+		indexdb.db,
+		txn.txn,
+		(*C.char)(unsafe.Pointer(&key[0])),
+		C.uint(len(key)),
+		C.uint(sec),
+		C.uint(seq),
+		C.uint(tid),
+	)
+	return ResultToError(ret)
+}
+
+func (db *Db) Set(_txn *Txn, key []byte, value []byte) error {
+	var txn *C.DB_TXN = nil
+	if _txn != nil {
+		txn = _txn.txn
+	}
 	ret := C.db_put(
 		db.db,
+		txn,
 		(*C.char)(unsafe.Pointer(&key[0])),
 		C.uint(len(key)),
 		(*C.char)(unsafe.Pointer(&value[0])),
@@ -254,12 +301,18 @@ func (db *Db) Set(key []byte, value []byte) error {
 	return ResultToError(ret)
 }
 
-func (db *Db) Get(key []byte, getbuff *uintptr) ([]byte, error) {
+func (db *Db) Get(_txn *Txn, key []byte, getbuff *uintptr) ([]byte, error) {
 	var data *C.char = (*C.char)(unsafe.Pointer(*getbuff))
 	var datalen C.uint
 
+	var txn *C.DB_TXN = nil
+	if _txn != nil {
+		txn = _txn.txn
+	}
+
 	ret := C.db_get(
 		db.db,
+		txn,
 		(*C.char)(unsafe.Pointer(&key[0])),
 		C.uint(len(key)),
 		&data,

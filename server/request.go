@@ -17,9 +17,8 @@ type cmdDef struct {
 }
 
 type bdbGetReq struct {
-	table string
-	key   []byte
-	resp  chan bdbGetResp
+	key  []byte
+	resp chan bdbGetResp
 }
 
 type bdbGetResp struct {
@@ -28,13 +27,23 @@ type bdbGetResp struct {
 }
 
 type bdbSetReq struct {
-	table string
 	key   []byte
 	value []byte
 	resp  chan bdbSetResp
 }
 
 type bdbSetResp struct {
+	err error
+}
+
+type bdbSetExReq struct {
+	key   []byte
+	value []byte
+	sec   uint32
+	resp  chan bdbSetExResp
+}
+
+type bdbSetExResp struct {
 	err error
 }
 
@@ -48,7 +57,8 @@ var workChan = make(chan interface{}, 10000)
 
 func Start(dbenv *bdb.DbEnv) {
 	for i := 0; i < 4; i++ {
-		go worker(i, dbenv)
+		w := NewWorker(i, dbenv)
+		go w.start()
 	}
 }
 
@@ -57,80 +67,166 @@ func Exit() {
 	workWait.Wait()
 }
 
-func worker(id int, dbenv *bdb.DbEnv) {
-	workWait.Add(1)
-	dbmap := make(map[string]*bdb.Db)
-	getdb := func(table string, dbtype int) (*bdb.Db, error) {
-		db := dbmap[table]
-		if db == nil {
-			var err error
-			db, err = dbenv.GetDb(table, dbtype)
+type Worker struct {
+	dbmap       map[string]*bdb.Db
+	expiredb    *bdb.Db
+	expireindex *bdb.Db
+	dbenv       *bdb.DbEnv
+	id          uint32
+	seq         uint32
+	getbuff     uintptr
+}
+
+func NewWorker(id int, dbenv *bdb.DbEnv) *Worker {
+	return &Worker{
+		dbmap:   make(map[string]*bdb.Db),
+		dbenv:   dbenv,
+		id:      uint32(id),
+		getbuff: 0,
+	}
+}
+
+func (w *Worker) getdb(table string, dbtype int) (*bdb.Db, error) {
+	db := w.dbmap[table]
+	if db == nil {
+		var err error
+		db, err = w.dbenv.GetDb(table, dbtype)
+		if err != nil {
+			log.Error("worker|GetDb|%s", err.Error())
+			return nil, err
+		}
+		w.dbmap[table] = db
+	}
+	return db, nil
+}
+
+func (w *Worker) checkerr(err error, db *bdb.Db) {
+	if err == bdb.ErrRepDead {
+		delete(w.dbmap, db.Name)
+		db.Close()
+	}
+}
+
+func (w *Worker) bdbSet(req *bdbSetReq) {
+	table, name := bdb.SplitKey(req.key)
+	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	if err != nil {
+		req.resp <- bdbSetResp{err}
+	} else {
+		err := db.Set(nil, name, req.value)
+		if err != nil {
+			w.checkerr(err, db)
+			req.resp <- bdbSetResp{err}
+		} else {
+			req.resp <- bdbSetResp{nil}
+		}
+	}
+}
+
+func (w *Worker) bdbSetEx(req *bdbSetExReq) {
+	table, name := bdb.SplitKey(req.key)
+	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	if err != nil {
+		w.checkerr(err, db)
+		req.resp <- bdbSetExResp{err}
+		return
+	} else {
+		txn, err := w.dbenv.Begin(bdb.DB_READ_COMMITTED)
+		if err != nil {
+			req.resp <- bdbSetExResp{err}
+			return
+		}
+		err = db.Set(txn, name, req.value)
+		if err != nil {
+			w.checkerr(err, db)
+			txn.Abort()
+			req.resp <- bdbSetExResp{err}
+			return
+		}
+		if w.expiredb == nil {
+			w.expiredb, err = w.dbenv.GetDb("__expire", bdb.DBTYPE_BTREE)
 			if err != nil {
+				txn.Abort()
 				log.Error("worker|GetDb|%s", err.Error())
-				return nil, err
+				req.resp <- bdbSetExResp{err}
+				return
 			}
-			dbmap[table] = db
 		}
-		return db, nil
+		if w.expireindex == nil {
+			w.expireindex, err = w.dbenv.GetDb("__expire.index", bdb.DBTYPE_HASH)
+			if err != nil {
+				txn.Abort()
+				log.Error("worker|GetDb|%s", err.Error())
+				req.resp <- bdbSetExResp{err}
+				return
+			}
+		}
+
+		w.seq++
+		err = bdb.SetExpire(w.expiredb, w.expireindex, txn, name, req.sec, w.seq, w.id)
+		if err != nil {
+			txn.Abort()
+			if err == bdb.ErrRepDead {
+				w.expiredb.Close()
+				w.expiredb = nil
+				w.expireindex.Close()
+				w.expireindex = nil
+			}
+			log.Error("worker|SetExpire|%s", err.Error())
+			req.resp <- bdbSetExResp{err}
+			return
+		}
+		txn.Commit()
+		req.resp <- bdbSetExResp{nil}
 	}
-	checkerr := func(err error, db *bdb.Db) {
-		if err == bdb.ErrRepDead {
-			delete(dbmap, db.Name)
-			db.Close()
+}
+
+func (w *Worker) bdbGet(req *bdbGetReq) {
+	table, name := bdb.SplitKey(req.key)
+	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	if err != nil {
+		req.resp <- bdbGetResp{nil, err}
+	} else {
+		value, err := db.Get(nil, name, &w.getbuff)
+		if err != nil {
+			if err == bdb.ErrNotFound {
+				req.resp <- bdbGetResp{nil, nil}
+			} else {
+				w.checkerr(err, db)
+				req.resp <- bdbGetResp{nil, err}
+			}
+		} else {
+			req.resp <- bdbGetResp{value, nil}
 		}
 	}
-	var getbuff uintptr = 0
+}
+
+func (w *Worker) start() {
+	workWait.Add(1)
 	defer func() {
-		for _, db := range dbmap {
+		for _, db := range w.dbmap {
 			db.Close()
 		}
-		if getbuff != 0 {
-			C.free(unsafe.Pointer(getbuff))
+		if w.getbuff != 0 {
+			C.free(unsafe.Pointer(w.getbuff))
 		}
-		log.Info("server|close|work|%d", id)
+		log.Info("server|close|work|%d", w.id)
 		workWait.Done()
 	}()
 	for req := range workChan {
 		switch req := req.(type) {
 		case bdbSetReq:
-			db, err := getdb(req.table, bdb.DBTYPE_HASH)
-			if err != nil {
-				req.resp <- bdbSetResp{err}
-			} else {
-				err := db.Set(req.key, req.value)
-				if err != nil {
-					checkerr(err, db)
-					req.resp <- bdbSetResp{err}
-				} else {
-					req.resp <- bdbSetResp{nil}
-				}
-			}
+			w.bdbSet(&req)
 		case bdbGetReq:
-			db, err := getdb(req.table, bdb.DBTYPE_HASH)
-			if err != nil {
-				req.resp <- bdbGetResp{nil, err}
-			} else {
-				value, err := db.Get(req.key, &getbuff)
-				if err != nil {
-					if err == bdb.ErrNotFound {
-						req.resp <- bdbGetResp{nil, nil}
-					} else {
-						checkerr(err, db)
-						req.resp <- bdbGetResp{nil, err}
-					}
-				} else {
-					req.resp <- bdbGetResp{value, nil}
-				}
-			}
+			w.bdbGet(&req)
 		}
 	}
 }
 
 func cmdGet(conn *Conn, args [][]byte) error {
 	log.Debug("cmdGet|%s", args[0])
-	table, key := bdb.SplitKey(args[0])
 	respChan := make(chan bdbGetResp, 1)
-	workChan <- bdbGetReq{table, key, respChan}
+	workChan <- bdbGetReq{args[0], respChan}
 	resp := <-respChan
 	if resp.err != nil {
 		conn.wb.WriteString("-ERR dberr\r\n")
@@ -146,9 +242,8 @@ func cmdGet(conn *Conn, args [][]byte) error {
 
 func cmdSet(conn *Conn, args [][]byte) error {
 	log.Debug("cmdSet|%s|%v", args[0], args[1])
-	table, key := bdb.SplitKey(args[0])
 	respChan := make(chan bdbSetResp, 1)
-	workChan <- bdbSetReq{table, key, args[1], respChan}
+	workChan <- bdbSetReq{args[0], args[1], respChan}
 	resp := <-respChan
 	if resp.err != nil {
 		conn.wb.WriteString("-ERR dberr\r\n")

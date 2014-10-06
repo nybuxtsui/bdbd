@@ -19,7 +19,7 @@ int is_finished(SHARED_DATA *shared_data) {
 }
 
 int
-db_get(DB *dbp, char *_key, unsigned int keylen, char **_data, unsigned int *datalen) {
+db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsigned int *datalen) {
     DBT key, data;
     int ret;
 
@@ -32,7 +32,7 @@ db_get(DB *dbp, char *_key, unsigned int keylen, char **_data, unsigned int *dat
     data.flags = DB_DBT_REALLOC;
     data.data = *_data;
 
-    ret = dbp->get(dbp, NULL, &key, &data, 0);
+    ret = dbp->get(dbp, txn, &key, &data, 0);
     if (ret == 0) {
         *_data = data.data;
         *datalen = data.size;
@@ -44,7 +44,61 @@ db_get(DB *dbp, char *_key, unsigned int keylen, char **_data, unsigned int *dat
 }
 
 int
-db_put(DB *dbp, char *_key, unsigned int keylen, char *_data, unsigned int datalen) {
+txn_begin(DB_ENV *dbenv, DB_TXN **txn, unsigned int flags) {
+    return dbenv->txn_begin(dbenv, NULL, txn, flags);
+}
+
+int
+txn_abort(DB_TXN *txn) {
+    return txn->abort(txn);
+}
+
+int
+txn_commit(DB_TXN *txn) {
+    return txn->commit(txn, 0);
+}
+
+int
+db_set_expire(
+        DB *expire_db,
+        DB *index_db,
+        DB_TXN *txn,
+        char *_key,
+        unsigned int keylen,
+        unsigned int sec,
+        unsigned int seq,
+        unsigned int tid) {
+    DBT key, data;
+    struct expire_key expire_value;
+    int ret;
+
+    memset(&key, 0, sizeof key);
+    memset(&data, 0, sizeof data);
+
+    time(&expire_value.t);
+    expire_value.t += sec;
+    expire_value.seq = seq;
+    expire_value.thread_id = tid;
+
+    key.data = &expire_value;
+    key.size = sizeof expire_value;
+
+    data.data = _key;
+    data.size = keylen;
+
+    ret = expire_db->put(expire_db, txn, &key, &data, 0);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = index_db->put(index_db, txn, &data, &key, 0);
+    if (ret != 0) {
+        return ret;
+    }
+    return 0;
+}
+
+int
+db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsigned int datalen) {
     DBT key, data;
     int ret;
 
@@ -57,7 +111,7 @@ db_put(DB *dbp, char *_key, unsigned int keylen, char *_data, unsigned int datal
     data.data = _data;
     data.size = datalen;
 
-    ret = dbp->put(dbp, NULL, &key, &data, 0);
+    ret = dbp->put(dbp, txn, &key, &data, 0);
     return ret;
 }
 
