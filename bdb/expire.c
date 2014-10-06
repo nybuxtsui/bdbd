@@ -28,6 +28,28 @@ open_expire_db(supthr_args *args) {
     }
 }
 
+static DB *
+open_expire_index_db(supthr_args *args) {
+    DB *db;
+    if ret;
+    for (;;) {
+        if (args->shared->app_finished == 1) {
+            return NULL;
+        }
+        if (args->shared->is_master == 0) {
+            sleep(1);
+            continue;
+        }
+        ret = get_db(args->dbenv, args->shared, "__expire.index.db", DB_HASH, &db);
+        if (ret != 0) {
+            args->dbenv->err(args->dbenv, ret, "Could not open expire index db.");
+            sleep(1);
+            continue;
+        }
+        return db;
+    }
+}
+
 static void
 get_expire_id(const char *key) {
     DB *db;
@@ -35,54 +57,119 @@ get_expire_id(const char *key) {
 
 }
 
-static DB *
-get_target_expire_db(supthr_args *args, dbmap_t dbmap, const char *table) {
-    DB *db;
+static int
+get_target_db(supthr_args *args, dbmap_t dbmap, const char *table, DB **db) {
     int ret;
 
-    char cname[256];
-    snprintf(cname, sizeof cname, "__expire.%s.db", table);
-    cname[sizeof cname - 1] = 0;
-    db = dbmap_find(dbmap, cname);
-    if (db == NULL) {
-        ret = get_db(args->dbenv, args->shared, cname, DB_HASH, &db);
-        if (ret) {
-            args->dbenv->err(args->dbenv, ret, "Could not delete cursor.");
-            return NULL;
-        }
-        dbmap_add(dbmap, table, db);
-    }
-}
-
-static DB *
-get_target_db(supthr_args *args, DBC *cur, dbmap_t dbmap, const char *table) {
-    DB *db;
-    int ret;
-
-    db = dbmap_find(dbmap, table);
-    if (db == NULL) { // db记录尚未缓存
+    *db = dbmap_find(dbmap, table);
+    if (*db == NULL) { // db记录尚未缓存
         char cname[256];
         snprintf(cname, sizeof cname, "%s.db", table);
         cname[sizeof cname - 1] = 0;
-        ret = get_db(args->dbenv, args->shared, cname, DB_UNKNOWN, &db);
+        ret = get_db(args->dbenv, args->shared, cname, DB_UNKNOWN, db);
         if (ret) {
             args->dbenv->err(args->dbenv, ret, "Could not open db.");
-            if (ret == ENOENT) { // 数据库不存在, 则跳过这条记录
-                ret = cur->del(cur, 0);
-                if (ret != 0) { // 即使删除失败，也暂时先跳过，等下次循环再来删除
-                    args->dbenv->err(args->dbenv, ret, "Could not delete cursor.");
-                }
-            }
-            return NULL;
+            return ret;
         }
-        dbmap_add(dbmap, table, db);
+        dbmap_add(dbmap, table, *db);
     }
-    return db;
+    return ret;
+}
+
+struct expire_ctx {
+    DB_ENV *dbenv;
+    SHARED_DATA *shared_data;
+    DBC *cur;
+    char *data_buff;
+    DB *expire_db, *expire_index_db;
+    dbmap_t dbmap;
+};
+
+static int
+expire_check_one(expire_ctx *ctx, DBT *key, DBT *value) {
+    struct expire_key _indexdata;
+    int ret;
+    DBT indexdata, delkey;
+    DB *target_db;
+
+    memset(&indexdata, 0, sizeof indexdata);
+    indexdata.flags = DB_DBT_USERMEM;
+    indexdata.data = &_indexdata;
+    data->flags = 0;
+    ret = expire_index_db->get(expire_index_db, NULL, &data, &indexdata);
+    if (ret) {
+        return ret;
+    }
+    if (memcmp(&_indexdata, key->data, sizeof _indexdata) != 0) {
+        return 0;
+    }
+    ret = ctx->expire_index_db->del(ctx->expire_index_db, NULL, &data, 0);
+    if (ret && ret != DB_NOTFOUND) {
+        return ret;
+    }
+    split_key((char*)data.data, data.size, &table, &tablelen, &name, &namelen);
+    ret = get_target_db(args, dbmap, table, &target_db);
+    if (ret) {
+        if (ret == DB_REP_HANDLE_DEAD) {
+            dbmap_del(ctx->dbmap, table);
+        }
+        return ret;
+    }
+    memset(&delkey, 0, sizeof delkey);
+    delkey.data = name;
+    delkey.size = namelen;
+    ret = target_db->del(target_db, NULL, &delkey, 0);
+    return ret == DB_NOTFOUND ? 0 : ret;
+}
+
+static int
+expire_check(expire_ctx *ctx) {
+    DBT key, data;
+    struct expire_key keydata;
+    int ret;
+    time_t now;
+
+    memset(&key, 0, sizeof key);
+    memset(&data, 0, sizeof data);
+    data.flags = DB_DBT_REALLOC;
+    data.data = ctx->data_buff;
+    key.flags = DB_DBT_USERMEM;
+    key.data = &keydata;
+
+    ret = ctx->expire_db->cursor(expire_db, NULL, &cur, DB_READ_UNCOMMITTED);
+    if (ret) {
+        ctx->expire_db->err(ctx->expire_db, ret, "cursor open failed");
+        return -1
+    }
+    time(&now);
+    for (;;) {
+        if (ctx->shared_data->app_finished == 1) {
+            return -1;
+        }
+        ret = ctx->cur->get(ctx->cur, &key, &data, DB_NEXT);
+        if (ret) {
+            if (ret != DB_NOTFOUND) { // expire库不为空
+                expire_db->err(expire_db, ret, "cursor get failed");
+            }
+            return 0;
+        }
+        if ((struct expire_key *)->t > now) { // 记录尚未超时
+            return 0;
+        }
+        ret = expire_check_one(ctx);
+        if (ret != 0) {
+            ctx->dbenv->(ctx->dbenv, ret, "expire_check_one failed.");
+            return -1;
+        }
+    }
 }
 
 int
 expire_thread(void *_args) {
 	supthr_args *args;
+
+    struct expire_ctx ctx;
+
     DB_ENV *dbenv;
     SHARED_DATA *shared_data;
     DBC *cur;
@@ -91,88 +178,54 @@ expire_thread(void *_args) {
     time_t now;
     struct expire_key keydata;
     char *data_buff, *table, *name;
-    DB *expire_db, *target_db, *target_expire_db;
+    DB *expire_db, *expire_index_db, *target_db;
     dbmap_t dbmap;
 
 	args = (supthr_args *)_args;
-	dbenv = args->dbenv;
-	shared_data = args->shared;
-
-    expire_db = open_expire_db(args);
-    dbmap = dbmap_create();
-    data_buff = NULL;
-    cur = NULL;
+	ctx.dbenv = args->dbenv;
+	ctx.shared_data = args->shared;
+    ctx.cur = NULL;
+    ctx.expire_db = NULL;
+    ctx.expire_index_db = NULL;
+    ctx.dbmap = dbmap_create();
 
     for (;;) {
-        if (cur) {
-            cur->close(cur);
-            cur = NULL;
+        if (ctx.cur) {
+            ctx.cur->close(cur);
+            ctx.cur = NULL;
         }
-
-        sleep(1);
+        if (ctx.expire_db == NULL) {
+            ctx.expire_db = open_expire_db(args);
+        }
         if (shared_data->app_finished == 1) {
             break;
         }
+        if (ctx.expire_index_db == NULL) {
+            ctx.expire_index_db = open_expire_index_db(args);
+        }
+        if (shared_data->app_finished == 1) {
+            break;
+        }
+        sleep(1);
         if (!shared_data->is_master) {
             continue;
         }
 
-        ret = expire_db->cursor(expire_db, NULL, &cur, DB_READ_UNCOMMITTED);
-        if (ret != 0) {
-            expire_db->err(expire_db, ret, "Could not open cursor.");
-            continue;
-        }
-
-        time(&now);
-
-        memset(&key, 0, sizeof key);
-        memset(&data, 0, sizeof data);
-        data.flags = DB_DBT_REALLOC;
-        data.data = data_buff;
-        key.flags = DB_DBT_USERMEM;
-        key.data = &keydata;
-
-        for (;;) {
-            ret = cur->get(cur, &key, &data, DB_NEXT);
-            if (ret) {
-                if (ret != DB_NOTFOUND) { // expire库不为空
-                    expire_db->err(expire_db, ret, "Could not get cursor.");
-                }
-                break;
-            }
-            struct expire_key *k = (struct expire_key *)key.data;
-            if (k->t > now) { // 记录尚未超时
-                break;
-            }
-            split_key((char*)data.data, data.size, &table, &tablelen, &name, &namelen);
-            target_db = get_target_db(args, cur, dbmap, table);
-            if (target_db == NULL) {
-                break;
-            }
-            target_expire_db = get_target_expire_db(args, dbmap, table);
-            if (target_expire_db) {
-            }
-
-            memset(&delkey, 0, sizeof delkey);
-            delkey.data = name;
-            delkey.size = namelen;
-
-            ret = target_db->del(target_db, NULL, &delkey, 0);
-            if (ret == DB_NOTFOUND) {
-            } else if (ret) {
-                if (ret == DB_REP_HANDLE_DEAD) {
-                    dbmap_del(dbmap, table);
-                }
-                break;
-            }
+        ret = expire_check(&ctx);
+        if (ret) {
+            expire_db->close(expire_db, 0);
+            expire_db = NULL;
+            expire_index_db->close(expire_db, 0);
+            expire_index_db = NULL;
         }
     }
 
-    if (data_buff) {
-        free(data_buff);
+    if (ctx.data_buff) {
+        free(ctx.data_buff);
     }
-    dbmap_destroy(dbmap);
-    db_close(expire_db);
+    dbmap_destroy(ctx.dbmap);
+    db_close(ctx.expire_db);
+    db_close(ctx.expire_index_db);
 
     return EXIT_SUCCESS;
 }

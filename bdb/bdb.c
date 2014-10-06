@@ -61,13 +61,31 @@ db_put(DB *dbp, char *_key, unsigned int keylen, char *_data, unsigned int datal
     return ret;
 }
 
-static int
-expire_key_compare_fcn(DB *db, const DBT *a, const DBT *b, size_t *locp) {
-    struct expire_key ai, bi;
-    memcpy(&ai, a->data, sizeof ai);
-    memcpy(&bi, b->data, sizeof bi);
-    time_t r = ai.t - bi.t;
-    return (r > 0) ? 1 : ((r < 0) ? -1 : 0);
+int
+expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
+    struct expire_key *ai, *bi;
+    ai = (struct expire_key*)a->data;
+    bi = (struct expire_key*)b->data;
+    uint64_t r = ai->t - bi->t;
+    if (r > 0) {
+        return 1;
+    } else if (r < 0) {
+        return -1;
+    }
+    r = ai->seq - bi->seq;
+    if (r > 0) {
+        return 1;
+    } else if (r < 0) {
+        return -1;
+    }
+    r = ai->thread_id - bi->thread_id;
+    if (r > 0) {
+        return 1;
+    } else if (r < 0) {
+        return -1;
+    } else {
+        return 0;
+    }
 }
 
 int
@@ -99,7 +117,7 @@ get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype, DB
         flags |= DB_CREATE;
     }
     if (strcmp("__expire.db", name) == 0) {
-        ret = dbp->set_dup_compare(dbp, expire_key_compare_fcn);
+        ret = dbp->set_dup_compare(dbp, expire_key_compare);
         if (ret) {
             return ret;
         }

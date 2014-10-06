@@ -26,7 +26,7 @@ int get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype
 int is_finished(SHARED_DATA *shared_data);
 
 void split_key(char *_key, int keylen, char **table, int *tablelen, char **name, int *namelen);
-void p();
+int expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp);
 #ifdef __cplusplus
 }
 #endif
