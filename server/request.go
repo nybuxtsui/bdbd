@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/nybuxtsui/bdbd/bdb"
 	"github.com/nybuxtsui/bdbd/log"
+	"strconv"
 	"sync"
 	"unsafe"
 )
@@ -48,8 +49,9 @@ type bdbSetExResp struct {
 }
 
 var cmdMap = map[string]cmdDef{
-	"get": cmdDef{cmdGet, 1, 1},
-	"set": cmdDef{cmdSet, 2, 2},
+	"get":   cmdDef{cmdGet, 1, 1},
+	"set":   cmdDef{cmdSet, 2, 2},
+	"setex": cmdDef{cmdSetEx, 3, 3},
 }
 
 var workWait sync.WaitGroup
@@ -219,6 +221,8 @@ func (w *Worker) start() {
 			w.bdbSet(&req)
 		case bdbGetReq:
 			w.bdbGet(&req)
+		case bdbSetExReq:
+			w.bdbSetEx(&req)
 		}
 	}
 }
@@ -244,6 +248,24 @@ func cmdSet(conn *Conn, args [][]byte) error {
 	log.Debug("cmdSet|%s|%v", args[0], args[1])
 	respChan := make(chan bdbSetResp, 1)
 	workChan <- bdbSetReq{args[0], args[1], respChan}
+	resp := <-respChan
+	if resp.err != nil {
+		conn.wb.WriteString("-ERR dberr\r\n")
+	} else {
+		conn.wb.WriteString("+OK\r\n")
+	}
+	return nil
+}
+
+func cmdSetEx(conn *Conn, args [][]byte) error {
+	log.Debug("cmdSetEx|%s|%s|%s", args[0], args[1], args[2])
+	respChan := make(chan bdbSetExResp, 1)
+	sec, err := strconv.ParseUint(string(args[1]), 10, 32)
+	if err != nil {
+		conn.wb.WriteString("-ERR argument err")
+		return nil
+	}
+	workChan <- bdbSetExReq{args[0], args[2], uint32(sec), respChan}
 	resp := <-respChan
 	if resp.err != nil {
 		conn.wb.WriteString("-ERR dberr\r\n")

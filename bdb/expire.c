@@ -69,7 +69,7 @@ get_target_db(struct expire_ctx *ctx, const char *table, DB **db) {
 }
 
 static int
-expire_check_one(struct expire_ctx *ctx, DBT *key, DBT *data) {
+expire_check_one(struct expire_ctx *ctx, DB_TXN *parent_txn, DBT *key, DBT *data) {
     struct expire_key _indexdata;
     int ret;
     DBT indexdata, delkey;
@@ -82,30 +82,31 @@ expire_check_one(struct expire_ctx *ctx, DBT *key, DBT *data) {
     memset(&indexdata, 0, sizeof indexdata);
     memset(&_indexdata, 0, sizeof _indexdata);
     indexdata.flags = DB_DBT_USERMEM;
+    indexdata.ulen = sizeof _indexdata;
     indexdata.data = &_indexdata;
 
-    txn = NULL;
-    ret = ctx->dbenv->txn_begin(ctx->dbenv, NULL, &txn, DB_READ_COMMITTED);
+    ret = ctx->dbenv->txn_begin(ctx->dbenv, parent_txn, &txn, DB_READ_UNCOMMITTED);
     if (ret) {
+        ctx->dbenv->err(ctx->dbenv, ret, "txn_begin");
+        return -1;
+    }
+    ret = ctx->expire_index_db->get(ctx->expire_index_db, txn, data, &indexdata, DB_RMW);
+    if (ret == DB_NOTFOUND) {
+        Debug("expire_check_one|index_not_found");
+        txn->commit(txn, 0);
+        return 0;
+    }
+    if (ret) {
+        txn->abort(txn);
         return ret;
     }
-
-    ret = ctx->expire_index_db->get(ctx->expire_index_db, txn, data, &indexdata, DB_RMW);
-    if (ret != DB_NOTFOUND) {
-        if (ret) {
-            txn->abort(txn);
-            return ret;
-        }
-        if (memcmp(&_indexdata, key->data, sizeof _indexdata) != 0) {
-            txn->abort(txn);
-            return 0;
-        }
-        ret = ctx->expire_index_db->del(ctx->expire_index_db, txn, data, 0);
-        if (ret && ret != DB_NOTFOUND) {
-            txn->abort(txn);
-            return ret;
-        }
+    if (memcmp(&_indexdata, key->data, sizeof _indexdata) != 0) {
+        Debug("expire_check_one|index_change");
+        txn->commit(txn, 0);
+        return 0;
     }
+
+    ret = ctx->expire_index_db->del(ctx->expire_index_db, txn, data, 0);
     split_key(data->data, data->size, &table, &tablelen, &name, &namelen);
     ret = get_target_db(ctx, table, &target_db);
     if (ret) {
@@ -130,12 +131,19 @@ expire_check_one(struct expire_ctx *ctx, DBT *key, DBT *data) {
 static int
 expire_check(struct expire_ctx *ctx) {
     DBT key, data;
+    DB_TXN *txn;
     struct expire_key keydata;
-    int ret;
+    int ret, count;
     time_t now;
 
-    ret = ctx->expire_db->cursor(ctx->expire_db, NULL, &ctx->cur, DB_READ_UNCOMMITTED);
+    ret = ctx->dbenv->txn_begin(ctx->dbenv, NULL, &txn, DB_READ_UNCOMMITTED);
     if (ret) {
+        ctx->dbenv->err(ctx->dbenv, ret, "txn_begin");
+        return -1;
+    }
+    ret = ctx->expire_db->cursor(ctx->expire_db, txn, &ctx->cur, DB_READ_UNCOMMITTED);
+    if (ret) {
+        txn->abort(txn);
         ctx->expire_db->err(ctx->expire_db, ret, "cursor open failed");
         return -1;
     }
@@ -145,13 +153,19 @@ expire_check(struct expire_ctx *ctx) {
     memset(&keydata, 0, sizeof keydata);
 
     key.flags = DB_DBT_USERMEM;
+    key.ulen = sizeof keydata;
     key.data = &keydata;
     data.flags = DB_DBT_REALLOC;
     data.data = ctx->data_buff;
+    count = 0;
 
     time(&now);
     for (;;) {
-        if (ctx->shared_data->app_finished == 1) {
+        ++count;
+        if (count >= 1000 || ctx->shared_data->app_finished == 1) {
+            ctx->cur->close(ctx->cur);
+            ctx->cur = NULL;
+            txn->commit(txn, 0);
             return -1;
         }
         ret = ctx->cur->get(ctx->cur, &key, &data, DB_NEXT);
@@ -159,18 +173,42 @@ expire_check(struct expire_ctx *ctx) {
             if (ret != DB_NOTFOUND) { // expire库不为空
                 ctx->expire_db->err(ctx->expire_db, ret, "cursor get failed");
             }
+            ctx->cur->close(ctx->cur);
+            ctx->cur = NULL;
+            txn->commit(txn, 0);
             return 0;
         }
         if (keydata.t > now) { // 记录尚未超时
+            ctx->cur->close(ctx->cur);
+            ctx->cur = NULL;
+            txn->commit(txn, 0);
             return 0;
         }
-        ret = expire_check_one(ctx, &key, &data);
+
+        char buf[1024];
+        snprintf(buf,
+                sizeof buf,
+                "expire_check|%u|%d|%d|%.*s",
+                (unsigned int)keydata.t,
+                keydata.seq,
+                keydata.thread_id,
+                data.size,
+                (char *)data.data);
+        buf[sizeof buf - 1] = 0;
+        Debug(buf);
+
+        ret = expire_check_one(ctx, txn, &key, &data);
         if (ret != 0) {
+            ctx->cur->close(ctx->cur);
+            ctx->cur = NULL;
+            txn->abort(txn);
             ctx->dbenv->err(ctx->dbenv, ret, "expire_check_one failed.");
             return -1;
         }
-        ctx->cur->del(ctx->cur, 0);
-        return 0;
+        ret = ctx->cur->del(ctx->cur, 0);
+        if (ret != 0) {
+            ctx->dbenv->err(ctx->dbenv, ret, "cur->del failed.");
+        }
     }
 }
 
@@ -187,28 +225,25 @@ expire_thread(void *args) {
     ctx.dbmap = dbmap_create();
 
     for (;;) {
+        sleep(1);
+        if (ctx.shared_data->app_finished == 1) {
+            break;
+        }
+        if (!ctx.shared_data->is_master) {
+            continue;
+        }
         if (ctx.cur) {
             ctx.cur->close(ctx.cur);
             ctx.cur = NULL;
         }
-        if (ctx.shared_data->app_finished == 1) {
-            break;
-        }
         if (ctx.expire_db == NULL) {
             ctx.expire_db = open_expire_db(&ctx);
-        }
-        if (ctx.shared_data->app_finished == 1) {
-            break;
         }
         if (ctx.expire_index_db == NULL) {
             ctx.expire_index_db = open_expire_index_db(&ctx);
         }
         if (ctx.shared_data->app_finished == 1) {
             break;
-        }
-        sleep(1);
-        if (!ctx.shared_data->is_master) {
-            continue;
         }
 
         ret = expire_check(&ctx);

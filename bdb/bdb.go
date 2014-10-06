@@ -223,8 +223,6 @@ func SplitKey(_key []byte) (string, []byte) {
 	table := C.GoStringN(_table, tablelen)
 	name := C.GoBytes(unsafe.Pointer(_name), namelen)
 
-	log.Info("%s,%s", table, name)
-
 	return table, name
 }
 
