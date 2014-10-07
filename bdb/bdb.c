@@ -5,11 +5,39 @@
 #include "rep_common.h"
 #include "bdb.h"
 
+void
+log_error(const char *file, const char *function, int line, const char *msg, int err) {
+    char buf[1024];
+    int i, pos;
+
+    i = 0;
+    pos = 0;
+    while (1) {
+        if (file[i] == '\0') {
+            break;
+        }
+#ifdef __WIN32
+        if (file[i] == '\\') {
+#else
+        if (file[i] == '/') {
+#endif
+            if (file[i + 1] != '\0') {
+                pos = i + 1;
+            }
+        }
+        ++i;
+    }
+
+    snprintf(buf, sizeof buf, "%s|%d|%s|%s|%d|%s", file + pos, line, function, msg, err, db_strerror(err));
+    buf[sizeof buf - 1] = 0;
+    Error(buf);
+}
+
 int
 db_close(DB *dbp) {
     int ret;
     if ((ret = dbp->close(dbp, 0)) != 0) {
-        dbp->err(dbp, ret, "DB->close");
+        LOG_ERROR("close", ret);
     }
     return 0;
 }
@@ -39,23 +67,37 @@ db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsi
     } else if (ret == DB_NOTFOUND) {
         *_data = NULL;
         *datalen = 0;
+    } else {
+        LOG_ERROR("get", ret);
     }
     return ret;
 }
 
 int
 txn_begin(DB_ENV *dbenv, DB_TXN **txn, unsigned int flags) {
-    return dbenv->txn_begin(dbenv, NULL, txn, flags);
+    int ret;
+    ret = dbenv->txn_begin(dbenv, NULL, txn, flags);
+    if (ret) {
+        LOG_ERROR("txn_begin", ret);
+    }
 }
 
 int
 txn_abort(DB_TXN *txn) {
-    return txn->abort(txn);
+    int ret;
+    ret = txn->abort(txn);
+    if (ret) {
+        LOG_ERROR("abort", ret);
+    }
 }
 
 int
 txn_commit(DB_TXN *txn) {
-    return txn->commit(txn, 0);
+    int ret;
+    ret = txn->commit(txn, 0);
+    if (ret) {
+        LOG_ERROR("commit", ret);
+    }
 }
 
 int
@@ -88,10 +130,12 @@ db_set_expire(
 
     ret = expire_db->put(expire_db, txn, &key, &data, 0);
     if (ret != 0) {
+        LOG_ERROR("put|expire", ret);
         return ret;
     }
     ret = index_db->put(index_db, txn, &data, &key, 0);
     if (ret != 0) {
+        LOG_ERROR("put|index", ret);
         return ret;
     }
     return 0;

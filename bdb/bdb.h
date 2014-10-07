@@ -15,6 +15,11 @@ struct expire_key {
 
 #include <db.h>
 #include "rep_common.h"
+
+#define LOG_ERROR(msg, err) log_error(__FILE__, __FUNCTION__, __LINE__, msg, err)
+
+void log_error(const char *file, const char *function, int line, const char *msg, int err);
+
 int start_base(int argc, char *argv[], void *ptr);
 int start_mgr(int argc, char *argv[], void *ptr);
 

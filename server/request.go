@@ -126,61 +126,65 @@ func (w *Worker) bdbSet(req *bdbSetReq) {
 }
 
 func (w *Worker) bdbSetEx(req *bdbSetExReq) {
+	var err error
+	if w.expiredb == nil {
+		w.expiredb, err = w.dbenv.GetDb("__expire", bdb.DBTYPE_BTREE)
+		if err != nil {
+			log.Error("worker|GetDb|%s", err.Error())
+			req.resp <- bdbSetExResp{err}
+			return
+		}
+	}
+	if w.expireindex == nil {
+		w.expireindex, err = w.dbenv.GetDb("__expire.index", bdb.DBTYPE_HASH)
+		if err != nil {
+			log.Error("worker|GetDb|%s", err.Error())
+			req.resp <- bdbSetExResp{err}
+			return
+		}
+	}
+
+	txn, err := w.dbenv.Begin(bdb.DB_READ_COMMITTED)
+	if err != nil {
+		req.resp <- bdbSetExResp{err}
+		return
+	}
+	defer func() {
+		if txn != nil {
+			txn.Abort()
+		}
+	}()
+	w.seq++
+	err = bdb.SetExpire(w.expiredb, w.expireindex, txn, req.key, req.sec, w.seq, w.id)
+	if err != nil {
+		if err == bdb.ErrRepDead {
+			w.expiredb.Close()
+			w.expiredb = nil
+			w.expireindex.Close()
+			w.expireindex = nil
+		}
+		log.Error("worker|SetExpire|%s", err.Error())
+		req.resp <- bdbSetExResp{err}
+		return
+	}
+
 	table, name := bdb.SplitKey(req.key)
 	db, err := w.getdb(table, bdb.DBTYPE_HASH)
 	if err != nil {
 		w.checkerr(err, db)
 		req.resp <- bdbSetExResp{err}
 		return
-	} else {
-		txn, err := w.dbenv.Begin(bdb.DB_READ_COMMITTED)
-		if err != nil {
-			req.resp <- bdbSetExResp{err}
-			return
-		}
-		err = db.Set(txn, name, req.value)
-		if err != nil {
-			w.checkerr(err, db)
-			txn.Abort()
-			req.resp <- bdbSetExResp{err}
-			return
-		}
-		if w.expiredb == nil {
-			w.expiredb, err = w.dbenv.GetDb("__expire", bdb.DBTYPE_BTREE)
-			if err != nil {
-				txn.Abort()
-				log.Error("worker|GetDb|%s", err.Error())
-				req.resp <- bdbSetExResp{err}
-				return
-			}
-		}
-		if w.expireindex == nil {
-			w.expireindex, err = w.dbenv.GetDb("__expire.index", bdb.DBTYPE_HASH)
-			if err != nil {
-				txn.Abort()
-				log.Error("worker|GetDb|%s", err.Error())
-				req.resp <- bdbSetExResp{err}
-				return
-			}
-		}
-
-		w.seq++
-		err = bdb.SetExpire(w.expiredb, w.expireindex, txn, name, req.sec, w.seq, w.id)
-		if err != nil {
-			txn.Abort()
-			if err == bdb.ErrRepDead {
-				w.expiredb.Close()
-				w.expiredb = nil
-				w.expireindex.Close()
-				w.expireindex = nil
-			}
-			log.Error("worker|SetExpire|%s", err.Error())
-			req.resp <- bdbSetExResp{err}
-			return
-		}
-		txn.Commit()
-		req.resp <- bdbSetExResp{nil}
 	}
+	err = db.Set(txn, name, req.value)
+	if err != nil {
+		w.checkerr(err, db)
+		req.resp <- bdbSetExResp{err}
+		return
+	}
+
+	txn.Commit()
+	txn = nil
+	req.resp <- bdbSetExResp{nil}
 }
 
 func (w *Worker) bdbGet(req *bdbGetReq) {
