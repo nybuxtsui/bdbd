@@ -162,9 +162,12 @@ db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsig
 int
 expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
     struct expire_key *ai, *bi;
+    int64_t r;
+
     ai = (struct expire_key*)a->data;
     bi = (struct expire_key*)b->data;
-    uint64_t r = ai->t - bi->t;
+
+    r = ai->t - bi->t;
     if (r > 0) {
         return 1;
     } else if (r < 0) {
@@ -189,7 +192,7 @@ expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
 int
 get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype, DB **out) {
     DB *dbp;
-    int ret;
+    int ret, ret2;
 	u_int32_t flags;
 	permfail_t *pfinfo;
 
@@ -215,15 +218,19 @@ get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype, DB
         flags |= DB_CREATE;
     }
     if (strcmp("__expire.db", name) == 0) {
-        ret = dbp->set_dup_compare(dbp, expire_key_compare);
+        ret = dbp->set_bt_compare(dbp, expire_key_compare);
         if (ret) {
+            LOG_ERROR("set_dup_compare", ret);
+            if ((ret2 = dbp->close(dbp, 0)) != 0) {
+                LOG_ERROR("close", ret2);
+            }
             return ret;
         }
     }
-    if ((ret = dbp->open(dbp, NULL, name, NULL, DB_HASH, flags, 0)) != 0) {
-        dbenv->err(dbenv, ret, "DB->open");
-        if ((ret = dbp->close(dbp, 0)) != 0) {
-            dbenv->err(dbenv, ret, "DB->close");
+    if ((ret = dbp->open(dbp, NULL, name, NULL, dbtype, flags, 0)) != 0) {
+        LOG_ERROR("open", ret);
+        if ((ret2 = dbp->close(dbp, 0)) != 0) {
+            LOG_ERROR("close", ret2);
         }
         return ret;
     }

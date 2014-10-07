@@ -136,20 +136,23 @@ expire_check(struct expire_ctx *ctx) {
     DB_TXN *txn;
     DBC *cur;
     struct expire_key keydata;
-    int ret, count;
+    int ret, ret2, count;
     time_t now;
 
+    count = 0;
 restart:
+    txn = NULL;
+    cur = NULL;
+
     ret = ctx->dbenv->txn_begin(ctx->dbenv, NULL, &txn, DB_READ_UNCOMMITTED);
     if (ret) {
         LOG_ERROR("txn_begin", ret);
-        return -1;
+        goto end;
     }
     ret = ctx->expire_db->cursor(ctx->expire_db, txn, &cur, DB_READ_UNCOMMITTED);
     if (ret) {
-        txn->abort(txn);
         LOG_ERROR("cursor", ret);
-        return -1;
+        goto end;
     }
 
     memset(&key, 0, sizeof key);
@@ -161,51 +164,32 @@ restart:
     key.data = &keydata;
     data.flags = DB_DBT_REALLOC;
     data.data = ctx->data_buff;
-    count = 0;
 
     time(&now);
     for (;;) {
+        ret = 0;
         ++count;
-        if (count >= 100) {
-            ret = cur->close(cur);
-            if (ret) {
-                LOG_ERROR("close|cur", ret);
-            }
-            ret = txn->commit(txn, 0);
-            if (ret) {
-                LOG_ERROR("commit", ret);
-            }
-            goto restart;
+        if (ctx->shared_data->app_finished == 1) {
+            goto end;
         }
-        if (count >= 100 || ctx->shared_data->app_finished == 1) {
-            ret = cur->close(cur);
-            if (ret) {
-                LOG_ERROR("close|cur", ret);
-            }
-            ret = txn->commit(txn, 0);
-            if (ret) {
-                LOG_ERROR("commit", ret);
-            }
-            if (ctx->shared_data->app_finished == 1) {
-                return -1;
-            } else {
-                goto restart;
-            }
+        if (count > 1000) {
+            ret = DB_NOTFOUND;
+            goto end;
+        }
+        if (count % 10 == 0) {
+            goto end;
         }
         ret = cur->get(cur, &key, &data, DB_NEXT);
-        if (ret || keydata.t > now) {
-            if (ret && ret != DB_NOTFOUND) { // expire库不为空
-                LOG_ERROR("get|cursor", ret);
-            }
-            ret = cur->close(cur);
-            if (ret) {
-                LOG_ERROR("close|cur", ret);
-            }
-            ret = txn->commit(txn, 0);
-            if (ret) {
-                LOG_ERROR("commit", ret);
-            }
-            return 0;
+        if (ret == DB_NOTFOUND) {
+            goto end;
+        }
+        if (ret == 0 && keydata.t > now) {
+            ret = DB_NOTFOUND;
+            goto end;
+        }
+        if (ret) {
+            LOG_ERROR("get|cursor", ret);
+            goto end;
         }
 
         char buf[1024];
@@ -221,30 +205,43 @@ restart:
         Debug(buf);
 
         ret = expire_check_one(ctx, txn, &key, &data);
-        if (ret != 0) {
-            Error("expire_check_one");
-            ret = cur->close(cur);
-            if (ret) {
-                LOG_ERROR("close|cur", ret);
-            }
-            ret = txn->abort(txn);
-            if (ret) {
-                LOG_ERROR("abort", ret);
-            }
-            return -1;
+        if (ret) {
+            LOG_ERROR("expire_check_one", ret);
+            goto end;
         }
         ret = cur->del(cur, 0);
         if (ret) {
             LOG_ERROR("cur|del", ret);
-            ret = cur->close(cur);
-            if (ret) {
-                LOG_ERROR("close|cur", ret);
+            goto end;
+        }
+    }
+
+end:
+    if (cur) {
+        ret2 = cur->close(cur);
+        if (ret2) {
+            LOG_ERROR("close|cur", ret2);
+        }
+    }
+    if (txn) {
+        if (ret == DB_NOTFOUND) {
+            ret2 = txn->commit(txn, 0);
+            if (ret2) {
+                LOG_ERROR("commit", ret);
             }
-            ret = txn->abort(txn);
-            if (ret) {
-                LOG_ERROR("abort", ret);
+            return 0;
+        } else if (ret) {
+            ret2 = txn->abort(txn);
+            if (ret2) {
+                LOG_ERROR("abort", ret2);
             }
             return -1;
+        } else {
+            ret2 = txn->commit(txn, 0);
+            if (ret2) {
+                LOG_ERROR("commit", ret);
+            }
+            goto restart;
         }
     }
 }
