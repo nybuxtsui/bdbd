@@ -128,7 +128,7 @@ db_set_expire(
     data.data = _key;
     data.size = keylen;
 
-    ret = expire_db->put(expire_db, txn, &key, &data, 0);
+    ret = expire_db->put(expire_db, txn, &key, &data, DB_NOOVERWRITE);
     if (ret != 0) {
         LOG_ERROR("put|expire", ret);
         return ret;

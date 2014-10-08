@@ -144,7 +144,7 @@ func (w *Worker) bdbSetEx(req *bdbSetExReq) {
 		}
 	}
 
-	txn, err := w.dbenv.Begin(bdb.DB_READ_COMMITTED)
+	txn, err := w.dbenv.Begin(bdb.DB_READ_UNCOMMITTED)
 	if err != nil {
 		req.resp <- bdbSetExResp{err}
 		return

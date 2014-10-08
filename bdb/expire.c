@@ -67,7 +67,7 @@ expire_check_one(struct expire_ctx *ctx, DB_TXN *parent_txn, DBT *key, DBT *data
     indexdata.ulen = sizeof _indexdata;
     indexdata.data = &_indexdata;
 
-    ret = ctx->dbenv->txn_begin(ctx->dbenv, parent_txn, &txn, DB_READ_UNCOMMITTED);
+    ret = ctx->dbenv->txn_begin(ctx->dbenv, parent_txn, &txn, DB_READ_COMMITTED);
     if (ret) {
         LOG_ERROR("txn_begin", ret);
         return ret;
@@ -144,12 +144,12 @@ restart:
     txn = NULL;
     cur = NULL;
 
-    ret = ctx->dbenv->txn_begin(ctx->dbenv, NULL, &txn, DB_READ_UNCOMMITTED);
+    ret = ctx->dbenv->txn_begin(ctx->dbenv, NULL, &txn, DB_READ_COMMITTED);
     if (ret) {
         LOG_ERROR("txn_begin", ret);
         goto end;
     }
-    ret = ctx->expire_db->cursor(ctx->expire_db, txn, &cur, DB_READ_UNCOMMITTED);
+    ret = ctx->expire_db->cursor(ctx->expire_db, txn, &cur, DB_READ_COMMITTED);
     if (ret) {
         LOG_ERROR("cursor", ret);
         goto end;
