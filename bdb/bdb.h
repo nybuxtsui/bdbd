@@ -41,7 +41,6 @@ int get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype
 int is_finished(SHARED_DATA *shared_data);
 
 void split_key(char *_key, int keylen, char **table, int *tablelen, char **name, int *namelen);
-int expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp);
 
 int txn_begin(DB_ENV *dbenv, DB_TXN **txn, unsigned int flags);
 int txn_abort(DB_TXN *txn);

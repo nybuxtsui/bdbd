@@ -1,9 +1,13 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <db.h>
 #include "rep_common.h"
 #include "bdb.h"
+#include "cmp.h"
 
 void
 log_error(const char *file, const char *function, int line, const char *msg, int err) {
@@ -159,7 +163,105 @@ db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsig
     return ret;
 }
 
-int
+struct msgpack_reader_ctx {
+    char *buf;
+    int pos;
+    int len;
+};
+
+static bool
+msgpack_reader(cmp_ctx_t *ctx, void *data, size_t limit) {
+    struct msgpack_reader_ctx *reader = (struct msgpack_reader_ctx*)ctx->buf;
+    if (reader->pos + limit > reader->len) {
+        return false;
+    }
+    memcpy(data, reader->buf + reader->pos, limit);
+    reader->pos += limit;
+    return true;
+}
+
+static int
+msgpack_compare(cmp_ctx_t *cmp1, cmp_ctx_t *cmp2);
+
+static int
+msgpack_compare_array(cmp_ctx_t *cmp1, cmp_ctx_t *cmp2, int c) {
+    int i;
+    int r;
+
+    for (i = 0; i < c; ++i) {
+        r = msgpack_compare(cmp1, cmp2);
+        if (r != 0) {
+            return r;
+        }
+    }
+    return 0;
+}
+
+static int
+msgpack_compare(cmp_ctx_t *cmp1, cmp_ctx_t *cmp2) {
+    cmp_object_t obj1, obj2;
+    int64_t r;
+    char buf1[512], buf2[512];
+
+    if (!cmp_read_object(cmp1, &obj1)) {
+        Error("cmp1_read_object");
+        return 0;
+    }
+    if (!cmp_read_object(cmp2, &obj2)) {
+        Error("cmp2_read_object");
+        return 0;
+    }
+    if (obj1.type != obj2.type) {
+        Error("cmp_type_diff");
+        return 0;
+    }
+    switch (obj1.type) {
+        case CMP_TYPE_FIXARRAY:
+        case CMP_TYPE_ARRAY16:
+        case CMP_TYPE_ARRAY32:
+            return msgpack_compare_array(cmp1, cmp2, obj1.as.array_size);
+        case CMP_TYPE_SINT64:
+            return obj1.as.s64 - obj1.as.s64;
+        case CMP_TYPE_FIXSTR:
+        case CMP_TYPE_STR8:
+        case CMP_TYPE_STR16:
+        case CMP_TYPE_STR32:
+            if (obj1.as.str_size >= sizeof buf1 || obj2.as.str_size >= sizeof buf2) {
+                Error("cmp_str_too_long");
+                return 0;
+            }
+            msgpack_reader(cmp1, buf1, obj1.as.str_size);
+            buf1[obj1.as.str_size] = 0;
+            msgpack_reader(cmp2, buf2, obj2.as.str_size);
+            buf2[obj2.as.str_size] = 0;
+            return strcmp(buf1, buf2);
+        default:
+            Error("cmp|obj.type");
+            return 0;
+    }
+}
+
+static int
+btree_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
+    int64_t r;
+    struct msgpack_reader_ctx reader1, reader2;
+    cmp_ctx_t cmp1, cmp2;
+
+    reader1.buf = a->data;
+    reader1.pos = 0;
+    reader1.len = a->size;
+
+    reader2.buf = b->data;
+    reader2.pos = 0;
+    reader2.len = b->size;
+
+    cmp_init(&cmp1, &reader1, msgpack_reader, NULL);
+    cmp_init(&cmp2, &reader2, msgpack_reader, NULL);
+
+    return msgpack_compare(&cmp1, &cmp2);
+}
+
+static int
 expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
     struct expire_key *ai, *bi;
     int64_t r;
