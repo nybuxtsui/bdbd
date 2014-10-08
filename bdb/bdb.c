@@ -142,7 +142,7 @@ db_set_expire(
 }
 
 int
-db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsigned int datalen) {
+db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsigned int datalen, unsigned int flags) {
     DBT key, data;
     int ret;
 
@@ -155,7 +155,7 @@ db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsig
     data.data = _data;
     data.size = datalen;
 
-    ret = dbp->put(dbp, txn, &key, &data, 0);
+    ret = dbp->put(dbp, txn, &key, &data, flags);
     return ret;
 }
 

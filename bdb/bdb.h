@@ -24,7 +24,7 @@ int start_base(int argc, char *argv[], void *ptr);
 int start_mgr(int argc, char *argv[], void *ptr);
 
 int db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsigned int *datalen);
-int db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsigned int datalen);
+int db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsigned int datalen, unsigned int flags);
 int db_set_expire(
         DB *expire_db,
         DB *index_db,

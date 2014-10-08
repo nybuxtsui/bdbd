@@ -30,6 +30,8 @@ const (
 
 	DB_READ_COMMITTED   = C.DB_READ_COMMITTED
 	DB_READ_UNCOMMITTED = C.DB_READ_UNCOMMITTED
+
+	DB_NOOVERWRITE = C.DB_NOOVERWRITE
 )
 
 type BdbConfig struct {
@@ -283,7 +285,7 @@ func SetExpire(expiredb *Db, indexdb *Db, txn *Txn, key []byte, sec uint32, seq 
 	return ResultToError(ret)
 }
 
-func (db *Db) Set(_txn *Txn, key []byte, value []byte) error {
+func (db *Db) Set(_txn *Txn, key []byte, value []byte, flags uint32) error {
 	var txn *C.DB_TXN = nil
 	if _txn != nil {
 		txn = _txn.txn
@@ -295,6 +297,7 @@ func (db *Db) Set(_txn *Txn, key []byte, value []byte) error {
 		C.uint(len(key)),
 		(*C.char)(unsafe.Pointer(&value[0])),
 		C.uint(len(value)),
+		C.uint(flags),
 	)
 	return ResultToError(ret)
 }
