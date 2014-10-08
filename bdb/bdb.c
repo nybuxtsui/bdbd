@@ -47,7 +47,7 @@ int is_finished(SHARED_DATA *shared_data) {
 }
 
 int
-db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsigned int *datalen) {
+db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsigned int *datalen, unsigned int flags) {
     DBT key, data;
     int ret;
 
@@ -60,7 +60,7 @@ db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsi
     data.flags = DB_DBT_REALLOC;
     data.data = *_data;
 
-    ret = dbp->get(dbp, txn, &key, &data, 0);
+    ret = dbp->get(dbp, txn, &key, &data, flags);
     if (ret == 0) {
         *_data = data.data;
         *datalen = data.size;

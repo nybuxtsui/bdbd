@@ -53,7 +53,7 @@ func (c *Conn) readLine() ([]byte, error) {
 	return line[:len(line)-2], nil
 }
 
-func (c *Conn) readNumber(buff []byte) (int64, error) {
+func readNumber(buff []byte) (int64, error) {
 	if len(buff) == 0 {
 		log.Error("readNumber|empty")
 		return 0, ErrRequest
@@ -88,7 +88,7 @@ func (c *Conn) readCount(tag byte) (int64, error) {
 		log.Error("readCount|tag|%c", line[0])
 		return 0, ErrRequest
 	}
-	count, err := c.readNumber(line[1:])
+	count, err := readNumber(line[1:])
 	if err != nil {
 		log.Error("readCount|readNumber|%s", err.Error())
 		return 0, ErrRequest

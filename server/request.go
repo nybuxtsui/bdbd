@@ -39,11 +39,24 @@ type bdbSetResp struct {
 	err error
 }
 
+type bdbIncrByReq struct {
+	key  []byte
+	inc  int64
+	resp chan bdbIncrByResp
+}
+
+type bdbIncrByResp struct {
+	result int64
+	err    error
+}
+
 var cmdMap = map[string]cmdDef{
-	"get":   cmdDef{cmdGet, 1, 1},
-	"set":   cmdDef{cmdSet, 2, 2},
-	"setex": cmdDef{cmdSetEx, 3, 3},
-	"setnx": cmdDef{cmdSetNx, 2, 2},
+	"get":    cmdDef{cmdGet, 1, 1},
+	"set":    cmdDef{cmdSet, 2, 2},
+	"setex":  cmdDef{cmdSetEx, 3, 3},
+	"setnx":  cmdDef{cmdSetNx, 2, 2},
+	"incrby": cmdDef{cmdIncrBy, 2, 2},
+	"incr":   cmdDef{cmdIncr, 1, 1},
 }
 
 var workWait sync.WaitGroup
@@ -53,6 +66,34 @@ func Start(dbenv *bdb.DbEnv) {
 	for i := 0; i < 4; i++ {
 		w := NewWorker(i, dbenv)
 		go w.start()
+	}
+}
+
+func (w *Worker) start() {
+	workWait.Add(1)
+	defer func() {
+		for _, db := range w.dbmap {
+			db.Close()
+		}
+		if w.getbuff != 0 {
+			C.free(unsafe.Pointer(w.getbuff))
+		}
+		log.Info("server|close|work|%d", w.id)
+		workWait.Done()
+	}()
+	for req := range workChan {
+		switch req := req.(type) {
+		case bdbSetReq:
+			if req.sec == 0 {
+				w.bdbSet(&req)
+			} else {
+				w.bdbSetEx(&req)
+			}
+		case bdbGetReq:
+			w.bdbGet(&req)
+		case bdbIncrByReq:
+			w.bdbIncrBy(&req)
+		}
 	}
 }
 
@@ -193,7 +234,7 @@ func (w *Worker) bdbGet(req *bdbGetReq) {
 	if err != nil {
 		req.resp <- bdbGetResp{nil, err}
 	} else {
-		value, err := db.Get(nil, name, &w.getbuff)
+		value, err := db.Get(nil, name, &w.getbuff, 0)
 		if err != nil {
 			if err == bdb.ErrNotFound {
 				req.resp <- bdbGetResp{nil, nil}
@@ -207,29 +248,53 @@ func (w *Worker) bdbGet(req *bdbGetReq) {
 	}
 }
 
-func (w *Worker) start() {
-	workWait.Add(1)
-	defer func() {
-		for _, db := range w.dbmap {
-			db.Close()
+func (w *Worker) bdbIncrBy(req *bdbIncrByReq) {
+	table, name := bdb.SplitKey(req.key)
+	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	if err != nil {
+		req.resp <- bdbIncrByResp{0, err}
+	} else {
+		txn, err := w.dbenv.Begin(bdb.DB_READ_COMMITTED)
+		if err != nil {
+			req.resp <- bdbIncrByResp{0, err}
+			return
 		}
-		if w.getbuff != 0 {
-			C.free(unsafe.Pointer(w.getbuff))
-		}
-		log.Info("server|close|work|%d", w.id)
-		workWait.Done()
-	}()
-	for req := range workChan {
-		switch req := req.(type) {
-		case bdbSetReq:
-			if req.sec == 0 {
-				w.bdbSet(&req)
-			} else {
-				w.bdbSetEx(&req)
+		defer func() {
+			if txn != nil {
+				txn.Abort()
 			}
-		case bdbGetReq:
-			w.bdbGet(&req)
+		}()
+
+		_value, err := db.Get(txn, name, &w.getbuff, bdb.DB_RMW)
+		var value int64 = 0
+		if err != nil {
+			if err != bdb.ErrNotFound {
+				w.checkerr(err, db)
+				req.resp <- bdbIncrByResp{0, err}
+				return
+			}
+		} else {
+			value, err = readNumber(_value)
+			if err != nil {
+				req.resp <- bdbIncrByResp{0, err}
+				return
+			}
 		}
+		value += req.inc
+		var buf [64]byte
+		err = db.Set(txn, name, strconv.AppendInt(buf[:0], value, 10), 0)
+		if err != nil {
+			req.resp <- bdbIncrByResp{0, err}
+			return
+		}
+		err = txn.Commit()
+		if err != nil {
+			req.resp <- bdbIncrByResp{0, err}
+			return
+		} else {
+			txn = nil
+		}
+		req.resp <- bdbIncrByResp{value, nil}
 	}
 }
 
@@ -267,8 +332,8 @@ func cmdSet(conn *Conn, args [][]byte) (err error) {
 
 func cmdSetEx(conn *Conn, args [][]byte) (err error) {
 	log.Debug("cmdSetEx|%s|%s|%s", args[0], args[1], args[2])
-	respChan := make(chan bdbSetResp, 1)
 	if sec, err := strconv.ParseUint(string(args[1]), 10, 32); err == nil {
+		respChan := make(chan bdbSetResp, 1)
 		workChan <- bdbSetReq{args[0], args[2], uint32(sec), false, respChan}
 		resp := <-respChan
 		if resp.err != nil {
@@ -299,6 +364,48 @@ func cmdSetNx(conn *Conn, args [][]byte) (err error) {
 		}
 	} else {
 		_, err = conn.wb.WriteString(":1\r\n")
+	}
+	return
+}
+
+func cmdIncrBy(conn *Conn, args [][]byte) (err error) {
+	log.Debug("cmdIncrBy|%s|%v", args[0], args[1])
+	if inc, err := strconv.ParseInt(string(args[1]), 10, 64); err == nil {
+		respChan := make(chan bdbIncrByResp, 1)
+		workChan <- bdbIncrByReq{args[0], inc, respChan}
+		resp := <-respChan
+		if resp.err != nil {
+			if resp.err == ErrRequest {
+				_, err = conn.wb.WriteString("-ERR value is not an integer or out of range\r\n")
+			} else {
+				conn.wb.WriteString("-ERR ")
+				conn.wb.WriteString(resp.err.Error())
+				_, err = conn.wb.WriteString("\r\n")
+			}
+		} else {
+			_, err = conn.wb.WriteString("+OK\r\n")
+		}
+	} else {
+		_, err = conn.wb.WriteString("-ERR argument err")
+	}
+	return
+}
+
+func cmdIncr(conn *Conn, args [][]byte) (err error) {
+	log.Debug("cmdIncr|%s", args[0])
+	respChan := make(chan bdbIncrByResp, 1)
+	workChan <- bdbIncrByReq{args[0], 1, respChan}
+	resp := <-respChan
+	if resp.err != nil {
+		if resp.err == ErrRequest {
+			_, err = conn.wb.WriteString("-ERR value is not an integer or out of range\r\n")
+		} else {
+			conn.wb.WriteString("-ERR ")
+			conn.wb.WriteString(resp.err.Error())
+			_, err = conn.wb.WriteString("\r\n")
+		}
+	} else {
+		_, err = conn.wb.WriteString("+OK\r\n")
 	}
 	return
 }

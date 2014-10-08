@@ -30,8 +30,10 @@ const (
 
 	DB_READ_COMMITTED   = C.DB_READ_COMMITTED
 	DB_READ_UNCOMMITTED = C.DB_READ_UNCOMMITTED
+	DB_TXN_SYNC         = C.DB_TXN_SYNC
 
 	DB_NOOVERWRITE = C.DB_NOOVERWRITE
+	DB_RMW         = C.DB_RMW
 )
 
 type BdbConfig struct {
@@ -302,7 +304,7 @@ func (db *Db) Set(_txn *Txn, key []byte, value []byte, flags uint32) error {
 	return ResultToError(ret)
 }
 
-func (db *Db) Get(_txn *Txn, key []byte, getbuff *uintptr) ([]byte, error) {
+func (db *Db) Get(_txn *Txn, key []byte, getbuff *uintptr, flags uint32) ([]byte, error) {
 	var data *C.char = (*C.char)(unsafe.Pointer(*getbuff))
 	var datalen C.uint
 
@@ -318,6 +320,7 @@ func (db *Db) Get(_txn *Txn, key []byte, getbuff *uintptr) ([]byte, error) {
 		C.uint(len(key)),
 		&data,
 		&datalen,
+		C.uint(flags),
 	)
 	err := ResultToError(ret)
 	if err == nil {
