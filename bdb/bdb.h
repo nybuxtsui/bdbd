@@ -7,12 +7,6 @@ extern "C" {
 
 #include <time.h>
 
-struct expire_key {
-    time_t t;
-    unsigned int thread_id;
-    unsigned int seq;
-};
-
 #include <db.h>
 #include "rep_common.h"
 

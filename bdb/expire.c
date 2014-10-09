@@ -5,6 +5,7 @@
 #include "rep_common.h"
 #include "bdb.h"
 #include "dbmap.h"
+#include "msgpack.h"
 
 struct expire_ctx {
     DB_ENV *dbenv;
@@ -52,7 +53,7 @@ get_target_db(struct expire_ctx *ctx, const char *table, DB **db) {
 
 static int
 expire_check_one(struct expire_ctx *ctx, DB_TXN *parent_txn, DBT *key, DBT *data) {
-    struct expire_key _indexdata;
+    char _indexdata[512];
     int ret, ret2;
     DBT indexdata, delkey;
     DB *target_db;
@@ -62,10 +63,9 @@ expire_check_one(struct expire_ctx *ctx, DB_TXN *parent_txn, DBT *key, DBT *data
 
     data->flags = 0;
     memset(&indexdata, 0, sizeof indexdata);
-    memset(&_indexdata, 0, sizeof _indexdata);
     indexdata.flags = DB_DBT_USERMEM;
     indexdata.ulen = sizeof _indexdata;
-    indexdata.data = &_indexdata;
+    indexdata.data = _indexdata;
 
     ret = ctx->dbenv->txn_begin(ctx->dbenv, parent_txn, &txn, DB_READ_COMMITTED);
     if (ret) {
@@ -81,7 +81,7 @@ expire_check_one(struct expire_ctx *ctx, DB_TXN *parent_txn, DBT *key, DBT *data
         LOG_ERROR("get|index", ret);
         goto abort;
     }
-    if (memcmp(&_indexdata, key->data, sizeof _indexdata) != 0) {
+    if (indexdata.size != key->size || memcmp(indexdata.data, key->data, key->size) != 0) {
         Debug("expire_check_one|index_change");
         goto commit;
     }
@@ -135,9 +135,13 @@ expire_check(struct expire_ctx *ctx) {
     DBT key, data;
     DB_TXN *txn;
     DBC *cur;
-    struct expire_key keydata;
+    char keydata[512];
     int ret, ret2, count;
-    time_t now;
+    int64_t seq, tid;
+    time_t now, t;
+    struct msgpack_ctx reader;
+    uint32_t array_size;
+    cmp_ctx_t cmp;
 
     count = 0;
 restart:
@@ -157,11 +161,10 @@ restart:
 
     memset(&key, 0, sizeof key);
     memset(&data, 0, sizeof data);
-    memset(&keydata, 0, sizeof keydata);
 
     key.flags = DB_DBT_USERMEM;
     key.ulen = sizeof keydata;
-    key.data = &keydata;
+    key.data = keydata;
     data.flags = DB_DBT_REALLOC;
     data.data = ctx->data_buff;
 
@@ -183,7 +186,23 @@ restart:
         if (ret == DB_NOTFOUND) {
             goto end;
         }
-        if (ret == 0 && keydata.t > now) {
+
+        reader.buf = key.data;
+        reader.pos = 0;
+        reader.len = key.size;
+        cmp_init(&cmp, &reader, msgpack_reader, NULL);
+        if (!cmp_read_array(&cmp, &array_size)) {
+            ret = -1;
+            goto end;
+        }
+        if (!cmp_read_s64(&cmp, &t)) {
+            ret = -1;
+            goto end;
+        }
+        cmp_read_s64(&cmp, &seq);
+        cmp_read_s64(&cmp, &tid);
+
+        if (ret == 0 && t > now) {
             ret = DB_NOTFOUND;
             goto end;
         }
@@ -195,10 +214,10 @@ restart:
         char buf[1024];
         snprintf(buf,
                 sizeof buf,
-                "expire_check_one|%u|%d|%d|%.*s",
-                (unsigned int)keydata.t,
-                keydata.seq,
-                keydata.thread_id,
+                "expire_check_one|%ld|%ld|%ld|%.*s",
+                t,
+                seq,
+                tid,
                 data.size,
                 (char *)data.data);
         buf[sizeof buf - 1] = 0;
