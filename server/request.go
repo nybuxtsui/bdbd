@@ -383,7 +383,11 @@ func cmdIncrBy(conn *Conn, args [][]byte) (err error) {
 				_, err = conn.wb.WriteString("\r\n")
 			}
 		} else {
-			_, err = conn.wb.WriteString("+OK\r\n")
+			var buf [64]byte
+			out := strconv.AppendInt(buf[:0], resp.result, 10)
+			conn.wb.WriteString(":")
+			conn.wb.Write(out)
+			_, err = conn.wb.WriteString("\r\n")
 		}
 	} else {
 		_, err = conn.wb.WriteString("-ERR argument err")
