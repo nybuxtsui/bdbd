@@ -1,10 +1,13 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <db.h>
 #include "rep_common.h"
 #include "bdb.h"
-#include "msgpack.h"
+#include "cmp.h"
 
 void
 log_error(const char *file, const char *function, int line, const char *msg, int err) {
@@ -112,39 +115,19 @@ db_set_expire(
         unsigned int seq,
         unsigned int tid) {
     DBT key, data;
-    struct msgpack_ctx writer;
-    cmp_ctx_t cmp;
-    char buf[512];
+    struct expire_key expire_value;
     int ret;
-    time_t t;
-
-    writer.buf = buf;
-    writer.pos = 0;
-    writer.len = sizeof buf;
-    cmp_init(&cmp, &writer, NULL, msgpack_writer);
-    if (!cmp_write_array(&cmp, 3)) {
-        Error("cmp_write_array");
-        return -1;
-    }
-    time(&t);
-    if (!cmp_write_s64(&cmp, t + sec)) {
-        Error("cmp_write_time");
-        return -1;
-    }
-    if (!cmp_write_s64(&cmp, seq)) {
-        Error("cmp_write_seq");
-        return -1;
-    }
-    if (!cmp_write_s64(&cmp, tid)) {
-        Error("cmp_write_tid");
-        return -1;
-    }
 
     memset(&key, 0, sizeof key);
     memset(&data, 0, sizeof data);
 
-    key.data = buf;
-    key.size = writer.pos;
+    time(&expire_value.t);
+    expire_value.t += sec;
+    expire_value.seq = seq;
+    expire_value.thread_id = tid;
+
+    key.data = &expire_value;
+    key.size = sizeof expire_value;
 
     data.data = _key;
     data.size = keylen;
@@ -178,6 +161,23 @@ db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsig
 
     ret = dbp->put(dbp, txn, &key, &data, flags);
     return ret;
+}
+
+struct msgpack_reader_ctx {
+    char *buf;
+    int pos;
+    int len;
+};
+
+static bool
+msgpack_reader(cmp_ctx_t *ctx, void *data, size_t limit) {
+    struct msgpack_reader_ctx *reader = (struct msgpack_reader_ctx*)ctx->buf;
+    if (reader->pos + limit > reader->len) {
+        return false;
+    }
+    memcpy(data, reader->buf + reader->pos, limit);
+    reader->pos += limit;
+    return true;
 }
 
 static int
@@ -219,13 +219,9 @@ msgpack_compare(cmp_ctx_t *cmp1, cmp_ctx_t *cmp2) {
         case CMP_TYPE_FIXARRAY:
         case CMP_TYPE_ARRAY16:
         case CMP_TYPE_ARRAY32:
-            if (obj1.as.array_size != obj1.as.array_size) {
-                Error("cmp_array_size_diff");
-                return 0;
-            }
             return msgpack_compare_array(cmp1, cmp2, obj1.as.array_size);
         case CMP_TYPE_SINT64:
-            return obj1.as.s64 - obj2.as.s64;
+            return obj1.as.s64 - obj1.as.s64;
         case CMP_TYPE_FIXSTR:
         case CMP_TYPE_STR8:
         case CMP_TYPE_STR16:
@@ -248,7 +244,7 @@ msgpack_compare(cmp_ctx_t *cmp1, cmp_ctx_t *cmp2) {
 static int
 btree_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
     int64_t r;
-    struct msgpack_ctx reader1, reader2;
+    struct msgpack_reader_ctx reader1, reader2;
     cmp_ctx_t cmp1, cmp2;
 
     reader1.buf = a->data;
@@ -263,6 +259,36 @@ btree_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
     cmp_init(&cmp2, &reader2, msgpack_reader, NULL);
 
     return msgpack_compare(&cmp1, &cmp2);
+}
+
+static int
+expire_key_compare(DB *db, const DBT *a, const DBT *b, size_t *locp) {
+    struct expire_key *ai, *bi;
+    int64_t r;
+
+    ai = (struct expire_key*)a->data;
+    bi = (struct expire_key*)b->data;
+
+    r = ai->t - bi->t;
+    if (r > 0) {
+        return 1;
+    } else if (r < 0) {
+        return -1;
+    }
+    r = ai->seq - bi->seq;
+    if (r > 0) {
+        return 1;
+    } else if (r < 0) {
+        return -1;
+    }
+    r = ai->thread_id - bi->thread_id;
+    if (r > 0) {
+        return 1;
+    } else if (r < 0) {
+        return -1;
+    } else {
+        return 0;
+    }
 }
 
 int
@@ -294,7 +320,7 @@ get_db(DB_ENV *dbenv, SHARED_DATA *shared_data, const char *name, int dbtype, DB
         flags |= DB_CREATE;
     }
     if (strcmp("__expire.db", name) == 0) {
-        ret = dbp->set_bt_compare(dbp, btree_key_compare);
+        ret = dbp->set_bt_compare(dbp, expire_key_compare);
         if (ret) {
             LOG_ERROR("set_dup_compare", ret);
             if ((ret2 = dbp->close(dbp, 0)) != 0) {
