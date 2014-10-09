@@ -45,6 +45,7 @@ func main() {
 			Listen string
 		} `toml:"server"`
 	}
+	config.Bdb.Flush = 1
 	_, err = toml.Decode(string(configstr), &config)
 	if err != nil {
 		log.Println("ERROR: decode config failed:", err)

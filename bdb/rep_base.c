@@ -28,9 +28,10 @@ static const char *progname = "ex_rep_base";
 static void event_callback __P((DB_ENV *, u_int32_t, void *));
 
 int
-start_base(argc, argv, ptr)
+start_base(argc, argv, flush, ptr)
 	int argc;
 	char *argv[];
+    int flush;
     void *ptr;
 {
 	DB_ENV *dbenv;
@@ -104,7 +105,7 @@ start_base(argc, argv, ptr)
 		goto err;
 	my_app_data.comm_infrastructure = machtab;
 
-	if ((ret = env_init(dbenv, setup_info.home)) != 0)
+	if ((ret = env_init(dbenv, setup_info.home, flush)) != 0)
 		goto err;
 
 	/*
