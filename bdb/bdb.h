@@ -20,8 +20,8 @@ struct expire_key {
 
 void log_error(const char *file, const char *function, int line, const char *msg, int err);
 
-int start_base(int argc, char *argv[], void *ptr);
-int start_mgr(int argc, char *argv[], void *ptr);
+int start_base(int argc, char *argv[], int flush, void *ptr);
+int start_mgr(int argc, char *argv[], int flush, void *ptr);
 
 int db_get(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char **_data, unsigned int *datalen, unsigned int flags);
 int db_put(DB *dbp, DB_TXN *txn, char *_key, unsigned int keylen, char *_data, unsigned int datalen, unsigned int flags);

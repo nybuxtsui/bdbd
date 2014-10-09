@@ -27,9 +27,10 @@ static const char *progname = "ex_rep_mgr";
 static void event_callback __P((DB_ENV *, u_int32_t, void *));
 
 int
-start_mgr(argc, argv, ptr)
+start_mgr(argc, argv, flush, ptr)
 	int argc;
 	char *argv[];
+    int flush;
     void *ptr;
 {
 	DB_ENV *dbenv;
@@ -136,7 +137,7 @@ start_mgr(argc, argv, ptr)
 	 *  - Site list - return a list of sites currently known to repmgr.
 	 */
 
-	if ((ret = env_init(dbenv, setup_info.home)) != 0)
+	if ((ret = env_init(dbenv, setup_info.home, flush)) != 0)
 		goto err;
 
 	/* Start checkpoint and log archive threads. */

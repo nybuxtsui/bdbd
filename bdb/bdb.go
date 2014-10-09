@@ -48,6 +48,7 @@ type BdbConfig struct {
 	RemoteAddr      []string
 	RemotePeer      string
 	Verbose         bool
+	Flush           int
 }
 
 type DbEnv struct {
@@ -145,10 +146,10 @@ func Start(config BdbConfig) *DbEnv {
 
 		if config.RepMgr {
 			log.Info("start_repmgr|%v", args)
-			C.start_mgr(C.int(len(argv)), &argv[0], unsafe.Pointer(dbenv))
+			C.start_mgr(C.int(len(argv)), &argv[0], C.int(config.Flush), unsafe.Pointer(dbenv))
 		} else {
 			log.Info("start_base|%v", args)
-			C.start_base(C.int(len(argv)), &argv[0], unsafe.Pointer(dbenv))
+			C.start_base(C.int(len(argv)), &argv[0], C.int(config.Flush), unsafe.Pointer(dbenv))
 		}
 
 		for _, arg := range argv {
