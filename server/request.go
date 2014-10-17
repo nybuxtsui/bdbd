@@ -2,7 +2,7 @@ package server
 
 import (
 	"github.com/nybuxtsui/bdbd/bdb"
-	"github.com/nybuxtsui/bdbd/log"
+	"github.com/nybuxtsui/log"
 	"strconv"
 	"sync"
 	"unsafe"

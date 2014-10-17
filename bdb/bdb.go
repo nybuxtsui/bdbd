@@ -2,7 +2,7 @@ package bdb
 
 import (
 	"errors"
-	"github.com/nybuxtsui/bdbd/log"
+	"github.com/nybuxtsui/log"
 	"os"
 	"strconv"
 	"sync"

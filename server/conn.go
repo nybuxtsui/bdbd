@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nybuxtsui/bdbd/bdb"
-	"github.com/nybuxtsui/bdbd/log"
+	"github.com/nybuxtsui/log"
 	"io"
 	"net"
 	"runtime"

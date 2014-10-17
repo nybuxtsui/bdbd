@@ -3,8 +3,8 @@ package main
 import (
 	"github.com/BurntSushi/toml"
 	"github.com/nybuxtsui/bdbd/bdb"
-	mylog "github.com/nybuxtsui/bdbd/log"
 	"github.com/nybuxtsui/bdbd/server"
+	mylog "github.com/nybuxtsui/log"
 	"io/ioutil"
 	"log"
 	"net"
