@@ -144,7 +144,7 @@ func (w *Worker) checkerr(err error, db *bdb.Db) {
 
 func (w *Worker) bdbSet(req *bdbSetReq) {
 	table, name := bdb.SplitKey(req.key)
-	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	db, err := w.getdb(table, bdb.DBTYPE_BTREE)
 	if err != nil {
 		req.resp <- bdbSetResp{err}
 	} else {
@@ -173,7 +173,7 @@ func (w *Worker) bdbSetEx(req *bdbSetReq) {
 		}
 	}
 	if w.expireindex == nil {
-		w.expireindex, err = w.dbenv.GetDb("__expire.index", bdb.DBTYPE_HASH)
+		w.expireindex, err = w.dbenv.GetDb("__expire.index", bdb.DBTYPE_BTREE)
 		if err != nil {
 			log.Error("worker|GetDb|%s", err.Error())
 			req.resp <- bdbSetResp{err}
@@ -206,7 +206,7 @@ func (w *Worker) bdbSetEx(req *bdbSetReq) {
 	}
 
 	table, name := bdb.SplitKey(req.key)
-	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	db, err := w.getdb(table, bdb.DBTYPE_BTREE)
 	if err != nil {
 		w.checkerr(err, db)
 		req.resp <- bdbSetResp{err}
@@ -230,7 +230,7 @@ func (w *Worker) bdbSetEx(req *bdbSetReq) {
 
 func (w *Worker) bdbGet(req *bdbGetReq) {
 	table, name := bdb.SplitKey(req.key)
-	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	db, err := w.getdb(table, bdb.DBTYPE_BTREE)
 	if err != nil {
 		req.resp <- bdbGetResp{nil, err}
 	} else {
@@ -250,7 +250,7 @@ func (w *Worker) bdbGet(req *bdbGetReq) {
 
 func (w *Worker) bdbIncrBy(req *bdbIncrByReq) {
 	table, name := bdb.SplitKey(req.key)
-	db, err := w.getdb(table, bdb.DBTYPE_HASH)
+	db, err := w.getdb(table, bdb.DBTYPE_BTREE)
 	if err != nil {
 		req.resp <- bdbIncrByResp{0, err}
 	} else {

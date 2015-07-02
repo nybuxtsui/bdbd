@@ -269,7 +269,7 @@ expire_thread(void *args) {
             ctx.expire_db = must_open_db(&ctx, "__expire.db", DB_BTREE);
         }
         if (ctx.expire_index_db == NULL) {
-            ctx.expire_index_db = must_open_db(&ctx, "__expire.index.db", DB_HASH);
+            ctx.expire_index_db = must_open_db(&ctx, "__expire.index.db", DB_BTREE);
         }
         if (ctx.shared_data->app_finished == 1) {
             break;
